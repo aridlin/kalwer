@@ -254,6 +254,7 @@ struct State {
     bool search_selecting = false;
     DWORD search_selection_anchor = 0;
     bool popup_selecting = false;
+    bool suppress_popup_launch_char = false;
     UINT32 popup_selection_anchor = 0;
     UINT32 popup_selection_end = 0;
     PopupButton popup_hover = PopupButton::none;
@@ -1167,6 +1168,11 @@ void start_command_popup(const std::wstring& command) {
     CommandJob* pointer = job.get();
     state.jobs.push_back(std::move(job));
     open_job_popup(pointer);
+    // WM_CHAR for the Enter that activated the result is queued after the
+    // WM_KEYDOWN handler returns. Do not leak that launch keystroke into a
+    // freshly created interactive process (it would instantly accept prompts
+    // such as `pause`). All later input is forwarded normally.
+    state.suppress_popup_launch_char = true;
 }
 
 void write_job_input(const char* data, DWORD size) {
@@ -2403,6 +2409,10 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
         }
         if (message == WM_CHAR) {
             wchar_t character = static_cast<wchar_t>(wparam);
+            if (state.suppress_popup_launch_char) {
+                state.suppress_popup_launch_char = false;
+                if (character == L'\r' || character == L'\n') return 0;
+            }
             if ((GetKeyState(VK_CONTROL) & 0x8000) &&
                 (character == 1 || character == 3 || character == 22 || character == 24)) {
                 return 0;
