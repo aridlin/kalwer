@@ -608,9 +608,9 @@ bool initialize_gl() {
             float column = floor((point.x - offset) / pitch);
             vec2 center = vec2((column + 0.5) * pitch + offset,
                                (row + 0.5) * pitch);
-            // Keep the search and first three results essentially solid. The
-            // actual halftone falloff begins in the gap below result three.
-            const float halftone_start = 286.0;
+            // Keep the search and first five results completely solid. The
+            // existing halftone falloff begins at result six.
+            const float halftone_start = 418.0;
             float depth = clamp((point.y - halftone_start) /
                                 (logical_size.y - halftone_start), 0.0, 1.0);
             float tapered_depth = smoothstep(0.0, 1.0, depth);
