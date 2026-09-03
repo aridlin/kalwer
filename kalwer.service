@@ -1,0 +1,13 @@
+[Unit]
+Description=Resident Kalwer launcher
+After=graphical-session.target elephant.service
+Wants=elephant.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kalwer --daemon
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=default.target

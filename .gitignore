@@ -1,0 +1,5 @@
+/elephant-field
+/pkg/
+/src/
+/*.pkg.tar.*
+/*.tar.gz
