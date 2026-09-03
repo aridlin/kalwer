@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Kalwer
+Comment=GPU-halftone launcher for Elephant
+Exec=kalwer
+Icon=kalwer
+Terminal=false
+Categories=Utility;
+StartupNotify=false

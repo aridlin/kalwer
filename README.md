@@ -61,6 +61,7 @@ application ID toggles the window without constructing a new GTK process.
   selection, and scroll position.
 - `/settings` opens persistent controls for prompt retention, the PTY connector
   and vertical-expansion durations, and the finished-command auto-close delay.
+- `/exit` closes the resident Kalwer process cleanly.
 
 ![Kalwer calculator decimal, fraction, mixed-number and percentage results](screenshots/calculator.png)
 
@@ -95,6 +96,21 @@ windowrule = no_shadow on, match:class elephant-field
 
 Kalwer is released under the MIT License.
 
+## bin.aridlin.pl uploader
+
+The build also produces `binup`, a small native CLI for creating
+bin.aridlin.pl bundles containing files, text panes, or both:
+
+```sh
+binup screenshot.png
+binup --text 'build notes' app.tar.zst
+printf 'piped text\n' | binup --stdin log.txt
+binup --text-file README.md kalwer.exe
+```
+
+File arguments may be repeated. So may `--text`, `--text-file`, and `--stdin`;
+the server response and authoritative bundle links are printed to stdout.
+
 ## Windows prototype
 
 The native Windows target lives in `windows/`. It uses Win32 for its resident
@@ -112,13 +128,16 @@ cmake -S windows -B build-windows -G Ninja \
 cmake --build build-windows
 ```
 
-Run `kalwer-windows.exe` once to keep it resident. `Alt+Space` toggles it; a
+Run `kalwer.exe` once to keep it resident. `Alt+Space` toggles it; a
 second invocation also toggles the existing instance. This early port already
 supports Start Menu application discovery, fuzzy search, native edit/selection
 keys and clipboard shortcuts, scrolling, persistent Shift+Enter favourites,
-calculator queries, and `?` Google queries. The custom ConPTY command popup and
-background-job UI are still being ported; `>` currently hands the command to
-Windows Terminal (or `cmd.exe` when Terminal is unavailable). Its `/settings`
-screen adds the shared timing/retention controls plus a current-user autostart
-toggle; it writes only the `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`
-`Kalwer` value and never requires administrator access.
+multi-form calculator queries, and `?` Google queries. `>` runs commands
+directly in an embedded interactive ConPTY session: output streams into the
+animated side panel, keyboard input is forwarded to the process, output can be
+selected/copied, and completed commands retain their real exit code. `BG`
+detaches a live command; `<` lists background commands and reopens their panel,
+with a success/failure notification on completion. `/settings` adds the shared
+timing/retention controls plus a current-user autostart toggle; it writes only
+the `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` `Kalwer` value and
+never requires administrator access. `/exit` terminates the resident instance.

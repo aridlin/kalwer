@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(kalwer_windows LANGUAGES CXX)
 
-add_executable(kalwer-windows WIN32 kalwer_windows.cpp)
+add_executable(kalwer-windows WIN32 kalwer_windows.cpp kalwer.rc)
+set_target_properties(kalwer-windows PROPERTIES OUTPUT_NAME kalwer)
 target_compile_features(kalwer-windows PRIVATE cxx_std_20)
 target_compile_definitions(kalwer-windows PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(kalwer-windows PRIVATE -Wall -Wextra -Wpedantic)

@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,7 +83,10 @@ struct State {
     bool resident = false;
     bool held = false;
     bool opening = false;
+    bool closing = false;
+    double reveal_visual = 1.0;
     gint64 opened_us = 0;
+    gint64 closing_us = 0;
     gint64 animation_last_us = 0;
     guint animation_source = 0;
     guint query_delay_source = 0;
@@ -258,21 +262,21 @@ void save_settings() {
 }
 
 void apply_favorite_order(std::vector<Result>& results) {
-    std::unordered_map<std::string, size_t> favorite_rank;
-    favorite_rank.reserve(state.favorite_keys.size());
-    for (size_t index = 0; index < state.favorite_keys.size(); ++index) {
-        favorite_rank.emplace(state.favorite_keys[index], index);
-    }
+    std::unordered_set<std::string> favorites(
+        state.favorite_keys.begin(), state.favorite_keys.end());
     for (Result& result : results) {
-        result.pinned = favorite_rank.contains(favorite_key(result));
+        result.pinned = favorites.contains(favorite_key(result));
     }
     std::stable_sort(results.begin(), results.end(), [&](const Result& left, const Result& right) {
-        const auto left_favorite = favorite_rank.find(favorite_key(left));
-        const auto right_favorite = favorite_rank.find(favorite_key(right));
-        const bool left_pinned = left_favorite != favorite_rank.end();
-        const bool right_pinned = right_favorite != favorite_rank.end();
+        const bool left_pinned = favorites.contains(favorite_key(left));
+        const bool right_pinned = favorites.contains(favorite_key(right));
         if (left_pinned != right_pinned) return left_pinned;
-        if (left_pinned) return left_favorite->second < right_favorite->second;
+        if (left_pinned) {
+            const std::string left_name = ascii_lower(left.text);
+            const std::string right_name = ascii_lower(right.text);
+            if (left_name != right_name) return left_name < right_name;
+            return ascii_lower(left.identifier) < ascii_lower(right.identifier);
+        }
         return left.source_rank < right.source_rank;
     });
 }
@@ -496,17 +500,15 @@ void draw_results(cairo_t* cr) {
         const Result& result = state.results[index];
         const int display_row = index - state.scroll_offset;
         const double y = kResultsY + display_row * kRowPitch;
-        const bool selected = index == state.selection;
-
         rounded_rectangle(cr, kResultX, y, kResultWidth, kRowHeight, 10);
-        if (selected) {
-            cairo_set_source_rgba(cr, 0.02, 0.20, 0.105, 0.97);
-        } else {
-            cairo_set_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
-        }
+        // Selection is composited by the GL shader. Keeping it out of the
+        // finished UI texture prevents the destination row from highlighting
+        // before the animated outline/fill reaches it, and avoids a full
+        // Cairo redraw plus texture upload on every arrow press.
+        cairo_set_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
         cairo_fill_preserve(cr);
         cairo_set_line_width(cr, 1.0);
-        cairo_set_source_rgba(cr, 0.31, 0.68, 0.47, selected ? 0.40 : 0.20);
+        cairo_set_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
         cairo_stroke(cr);
 
         draw_icon(cr, result.icon, kResultX + 12, y + 10, 38);
@@ -623,6 +625,7 @@ bool initialize_gl() {
         uniform float opening;
         uniform float selection_y;
         uniform int has_results;
+        uniform int closing;
 
         const int bayer[64] = int[64](
              0,48,12,60, 3,51,15,63,
@@ -707,9 +710,12 @@ bool initialize_gl() {
                                   length(point - center));
             float coverage = point.y < halftone_start ? 1.0 : dot;
 
-            float reveal_front = 88.0 + ease_out_cubic(opening) *
-                                 (logical_size.y - 86.0);
-            float reveal = point.y < 88.0
+            float reveal_front = closing != 0
+                                     ? ease_out_cubic(opening) *
+                                           (logical_size.y + 10.0)
+                                     : 88.0 + ease_out_cubic(opening) *
+                                           (logical_size.y - 86.0);
+            float reveal = closing == 0 && point.y < 88.0
                                ? 1.0
                                : 1.0 - smoothstep(reveal_front - 2.0,
                                                    reveal_front + 2.0, point.y);
@@ -780,10 +786,7 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
         state.texture_dirty = false;
     }
 
-    const double elapsed_ms = (g_get_monotonic_time() - state.opened_us) / 1000.0;
-    const float progress = state.opening
-                               ? static_cast<float>(clamp01(elapsed_ms / 360.0))
-                               : 1.0f;
+    const float progress = static_cast<float>(state.reveal_visual);
     glUseProgram(state.gl_program);
     glUniform1i(glGetUniformLocation(state.gl_program, "ui_texture"), 0);
     glUniform2f(glGetUniformLocation(state.gl_program, "logical_size"),
@@ -794,6 +797,8 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
                     (state.selection_visual - state.scroll_offset) * kRowPitch));
     glUniform1i(glGetUniformLocation(state.gl_program, "has_results"),
                 state.results.empty() ? 0 : 1);
+    glUniform1i(glGetUniformLocation(state.gl_program, "closing"),
+                state.closing ? 1 : 0);
     glBindVertexArray(state.gl_vertex_array);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -959,7 +964,19 @@ void schedule_query(guint delay_ms) {
     state.query_delay_source = g_timeout_add(delay_ms, run_query, nullptr);
 }
 
+void ensure_animation();
+
+void finish_hide_kalwer() {
+    state.closing = false;
+    if (state.resident && state.window) {
+        gtk_widget_hide(state.window);
+    } else if (state.app) {
+        g_application_quit(G_APPLICATION(state.app));
+    }
+}
+
 void hide_kalwer() {
+    if (state.closing) return;
     stop_query();
     if (state.query_delay_source) {
         g_source_remove(state.query_delay_source);
@@ -968,11 +985,11 @@ void hide_kalwer() {
     if (state.window && gtk_widget_get_visible(state.window)) {
         state.hidden_us = g_get_monotonic_time();
     }
-    if (state.resident && state.window) {
-        gtk_widget_hide(state.window);
-    } else if (state.app) {
-        g_application_quit(G_APPLICATION(state.app));
-    }
+    state.closing = true;
+    state.opening = false;
+    state.reveal_visual = 1.0;
+    state.closing_us = g_get_monotonic_time();
+    ensure_animation();
 }
 
 CommandJob* find_job(const std::string& session) {
@@ -1801,7 +1818,7 @@ Result calculator_result(const std::string& value, const std::string& label) {
     Result result;
     result.identifier = value;
     result.text = value;
-    result.subtext = label;
+    result.subtext = label + " · ENTER TO COPY";
     result.icon = "accessories-calculator";
     result.provider = "kalwer-calculator";
     result.action = "copy";
@@ -1849,7 +1866,7 @@ std::vector<Result> calculator_results(const std::string& input) {
         results.push_back(calculator_result(format_number(value * 100.0) + "%", "PERCENT"));
     } else {
         const std::string result = format_number(value);
-        results.push_back(calculator_result(result, "CALCULATED RESULT · ENTER TO COPY"));
+        results.push_back(calculator_result(result, "CALCULATED RESULT"));
     }
     return results;
 }
@@ -2112,6 +2129,7 @@ void toggle_favorite() {
 void move_selection(int delta) {
     if (state.results.empty()) return;
     const int count = static_cast<int>(state.results.size());
+    const int previous_scroll = state.scroll_offset;
     state.selection = std::clamp(state.selection + delta, 0, count - 1);
     if (state.selection < state.scroll_offset) {
         state.scroll_offset = state.selection;
@@ -2123,20 +2141,36 @@ void move_selection(int delta) {
     } else if (state.selection_visual > state.scroll_offset + kSelectableResults - 1) {
         state.selection_visual = state.scroll_offset + kSelectableResults - 1;
     }
-    invalidate_finished();
+    // A scroll changes which rows are baked into the UI texture. A selection
+    // change alone only updates the shader uniform and remains GPU-only.
+    if (state.scroll_offset != previous_scroll) invalidate_finished();
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
 
 gboolean animation_tick(GtkWidget*, GdkFrameClock* clock, gpointer) {
     const gint64 now = gdk_frame_clock_get_frame_time(clock);
-    const double elapsed_ms = state.animation_last_us
-                                  ? (now - state.animation_last_us) / 1000.0
-                                  : 16.0;
+    const double elapsed_ms = std::clamp(
+        state.animation_last_us ? (now - state.animation_last_us) / 1000.0 : 16.0,
+        1.0, 80.0);
     state.animation_last_us = now;
     bool continue_animation = false;
 
+    if (state.closing) {
+        const double closing_ms = std::max(0.0, (now - state.closing_us) / 1000.0);
+        state.reveal_visual = std::max(0.0, 1.0 - closing_ms / 280.0);
+        if (state.reveal_visual <= 0.0) {
+            state.animation_source = 0;
+            state.animation_last_us = 0;
+            finish_hide_kalwer();
+            return G_SOURCE_REMOVE;
+        }
+        continue_animation = true;
+    }
+
     if (state.opening) {
-        if ((now - state.opened_us) / 1000.0 >= 360.0) {
+        const double opening_ms = std::max(0.0, (now - state.opened_us) / 1000.0);
+        state.reveal_visual = std::min(1.0, opening_ms / 360.0);
+        if (state.reveal_visual >= 1.0) {
             state.opening = false;
         } else {
             continue_animation = true;
@@ -2409,7 +2443,6 @@ gboolean on_motion(GtkWidget*, GdkEventMotion* event, gpointer) {
     const int row = pointer_result(event->x, event->y);
     if (row >= 0 && row != state.selection) {
         state.selection = row;
-        invalidate_finished();
         ensure_animation();
     }
     return TRUE;
@@ -2487,7 +2520,9 @@ void show_popup() {
         state.selection_visual = 0.0;
     }
     state.scroll_accumulator = 0.0;
+    state.closing = false;
     state.opening = true;
+    state.reveal_visual = 0.0;
     state.opened_us = now;
     invalidate_surfaces();
     gtk_widget_show_all(state.window);
@@ -2509,6 +2544,7 @@ void activate(GtkApplication* app, gpointer) {
     state.app = app;
     state.window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(state.window), "Kalwer");
+    gtk_window_set_icon_name(GTK_WINDOW(state.window), "kalwer");
     gtk_window_set_default_size(GTK_WINDOW(state.window), kWindowWidth, kWindowHeight);
     gtk_window_set_resizable(GTK_WINDOW(state.window), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(state.window), FALSE);
