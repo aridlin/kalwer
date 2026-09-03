@@ -809,9 +809,12 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
 
 void stop_query() {
     if (!state.query_process) return;
-    if (!g_subprocess_get_if_exited(state.query_process)) {
-        g_subprocess_force_exit(state.query_process);
-    }
+    // get_if_exited() is an exit-status accessor, not a non-blocking poll; GLib
+    // requires the subprocess to have been waited first and emits a critical
+    // assertion otherwise. If an async query is still owned here, cancelling it
+    // directly is safe even if it raced to completion, and keeps rapid typing
+    // off the warning/critical path.
+    g_subprocess_force_exit(state.query_process);
     g_clear_object(&state.query_process);
 }
 
