@@ -629,11 +629,22 @@ bool initialize_gl() {
             int by = int(mod(row, 8.0));
             float threshold = (float(bayer[by * 8 + bx]) + 0.5) / 64.0;
             float antialias = max(fwidth(length(point - center)), 0.65);
-            float dot = 1.0 - smoothstep(radius - antialias, radius + antialias,
-                                         length(point - center));
-            float site_visibility = 1.0 - smoothstep(
-                density - 0.035, density + 0.035, threshold);
-            dot *= site_visibility;
+            // Density changes the radius of a site instead of multiplying its
+            // entire grid cell. This preserves circular windows and prevents
+            // the Bayer lattice from appearing as translucent square tiles.
+            float site_visibility = density >= 0.999
+                                        ? 1.0
+                                        : 1.0 - smoothstep(
+                                              density - 0.035,
+                                              density + 0.035,
+                                              threshold);
+            float site_radius = radius * sqrt(max(site_visibility, 0.0));
+            float dot = site_visibility < 0.01
+                            ? 0.0
+                            : 1.0 - smoothstep(
+                                  site_radius - antialias,
+                                  site_radius + antialias,
+                                  length(point - center));
 
             float reveal_front = 88.0 + ease_out_cubic(opening) *
                                  (logical_size.y - 86.0);
