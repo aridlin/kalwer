@@ -544,7 +544,13 @@ void update_results() {
     const std::wstring query = lower_copy(trim_copy(raw_query));
     std::vector<AppEntry> filtered;
 
-    if (query == L"/settings") {
+    if (query == L"/exit") {
+        AppEntry exit;
+        exit.title = L"EXIT KALWER";
+        exit.subtitle = L"STOP RESIDENT LAUNCHER";
+        exit.link = L"::exit";
+        filtered.push_back(std::move(exit));
+    } else if (query == L"/settings") {
         AppEntry settings;
         settings.title = L"KALWER SETTINGS";
         settings.subtitle = L"AUTOSTART · TIMING · RETENTION";
@@ -627,6 +633,10 @@ void hide_launcher();
 void activate_selection() {
     if (state.results.empty()) return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
+    if (result.link == L"::exit") {
+        DestroyWindow(state.window);
+        return;
+    }
     if (result.link == L"::settings") {
         state.settings_mode = true;
         state.selection = 0;

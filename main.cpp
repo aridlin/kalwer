@@ -2034,6 +2034,10 @@ void show_settings_window() {
 void activate_selection() {
     if (state.selection < 0 || state.selection >= static_cast<int>(state.results.size())) return;
     const Result result = state.results[state.selection];
+    if (result.provider == "kalwer-exit") {
+        g_application_quit(G_APPLICATION(state.app));
+        return;
+    }
     if (result.provider == "kalwer-settings") {
         show_settings_window();
         return;
@@ -2333,6 +2337,17 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
 void on_entry_changed(GtkEditable*, gpointer) {
     if (!state.applying_completion) clear_completion();
     const std::string input = gtk_entry_get_text(GTK_ENTRY(state.entry));
+    if (trim_copy(input) == "/exit") {
+        Result exit;
+        exit.identifier = "exit";
+        exit.text = "EXIT KALWER";
+        exit.subtext = "STOP RESIDENT LAUNCHER";
+        exit.icon = "application-exit";
+        exit.provider = "kalwer-exit";
+        exit.action = "quit";
+        show_local_results({std::move(exit)});
+        return;
+    }
     if (trim_copy(input) == "/settings") {
         Result settings;
         settings.identifier = "settings";
