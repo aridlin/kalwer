@@ -812,7 +812,7 @@ HRESULT create_size_resources(UINT pixel_width, UINT pixel_height, float scale) 
     const D2D1_BITMAP_PROPERTIES1 bitmap_properties = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
-                          D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f * scale, 96.0f * scale);
+                          D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
     result = render.d2d_context->CreateBitmapFromDxgiSurface(
         ui_surface.Get(), &bitmap_properties, render.ui_target.GetAddressOf());
     if (FAILED(result)) { state.graphics_stage = L"Bind Direct2D finished-UI target"; return result; }
@@ -1022,7 +1022,14 @@ HRESULT render_frame() {
     state.selection_visual += (target - state.selection_visual) * 0.24f;
 
     render.d2d_context->SetTarget(render.ui_target.Get());
-    render.d2d_context->SetTransform(D2D1::Matrix3x2F::Identity());
+    // The composition surface is sized in physical pixels while every Kalwer
+    // layout constant is expressed in logical DIPs. Apply the monitor scale to
+    // the finished UI just as the mask shader maps its normalized coordinates
+    // back to the logical 650x632 canvas. Keeping these transforms paired is
+    // essential: otherwise the rows render at 100% while the GPU outline and
+    // halftone render at 125/150%, visibly detaching from the interface.
+    render.d2d_context->SetTransform(
+        D2D1::Matrix3x2F::Scale(render.scale, render.scale));
     render.d2d_context->BeginDraw();
     render.d2d_context->Clear(color(0, 0, 0, 0));
     draw_search();
