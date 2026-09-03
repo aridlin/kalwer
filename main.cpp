@@ -608,11 +608,13 @@ bool initialize_gl() {
             float column = floor((point.x - offset) / pitch);
             vec2 center = vec2((column + 0.5) * pitch + offset,
                                (row + 0.5) * pitch);
-            // Keep the search and first five results completely solid. The
-            // existing halftone falloff begins at result six.
+            // Exempt the first five results without resetting the taper: row
+            // six picks up the exact dot size and density it had when the
+            // halftone curve began below row three.
+            const float curve_origin = 286.0;
             const float halftone_start = 418.0;
-            float depth = clamp((point.y - halftone_start) /
-                                (logical_size.y - halftone_start), 0.0, 1.0);
+            float depth = clamp((point.y - curve_origin) /
+                                (logical_size.y - curve_origin), 0.0, 1.0);
             float tapered_depth = smoothstep(0.0, 1.0, depth);
             // Windshield-frit proportions: dot diameter performs most of the
             // taper. Smoothstep gives the solid-to-circle handoff a flat
@@ -622,9 +624,7 @@ bool initialize_gl() {
             // starts thinning farther down and removes a restrained 16% at
             // the bottom, with each site fading smoothly rather than popping.
             float density_depth = smoothstep(0.28, 1.0, depth);
-            float density = point.y <= halftone_start
-                                ? 1.0
-                                : 1.0 - 0.16 * pow(density_depth, 1.65);
+            float density = 1.0 - 0.16 * pow(density_depth, 1.65);
             int bx = int(mod(column, 8.0));
             int by = int(mod(row, 8.0));
             float threshold = (float(bayer[by * 8 + bx]) + 0.5) / 64.0;
@@ -645,6 +645,7 @@ bool initialize_gl() {
                                   site_radius - antialias,
                                   site_radius + antialias,
                                   length(point - center));
+            float coverage = point.y < halftone_start ? 1.0 : dot;
 
             float reveal_front = 88.0 + ease_out_cubic(opening) *
                                  (logical_size.y - 86.0);
@@ -652,7 +653,7 @@ bool initialize_gl() {
                                ? 1.0
                                : 1.0 - smoothstep(reveal_front - 2.0,
                                                    reveal_front + 2.0, point.y);
-            color = ui * (dot * reveal);
+            color = ui * (coverage * reveal);
         }
     )glsl";
 
