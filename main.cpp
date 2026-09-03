@@ -120,6 +120,15 @@ struct State {
     guint command_serial = 0;
     std::vector<CommandJob> jobs;
     gint64 hidden_us = 0;
+    double prompt_retention_ms = 3000.0;
+    double popup_line_ms = 220.0;
+    double popup_expand_ms = 390.0;
+    double output_close_ms = 2000.0;
+    GtkWidget* settings_window = nullptr;
+    GtkWidget* settings_prompt_retention = nullptr;
+    GtkWidget* settings_popup_line = nullptr;
+    GtkWidget* settings_popup_expand = nullptr;
+    GtkWidget* settings_output_close = nullptr;
 };
 
 State state;
@@ -193,6 +202,57 @@ void save_favorites() {
     if (g_file_set_contents(path, contents.data(), contents.size(), nullptr)) {
         g_chmod(path, 0600);
     }
+    g_free(path);
+    g_free(directory);
+}
+
+double bounded_setting(GKeyFile* file, const char* key, double fallback,
+                       double minimum, double maximum) {
+    GError* error = nullptr;
+    const double value = g_key_file_get_double(file, "timing", key, &error);
+    if (error) {
+        g_error_free(error);
+        return fallback;
+    }
+    return std::clamp(value, minimum, maximum);
+}
+
+void load_settings() {
+    gchar* path = g_build_filename(g_get_user_config_dir(), "kalwer", "settings-v1.ini",
+                                   nullptr);
+    GKeyFile* file = g_key_file_new();
+    if (g_key_file_load_from_file(file, path, G_KEY_FILE_NONE, nullptr)) {
+        state.prompt_retention_ms = bounded_setting(
+            file, "prompt_retention_ms", 3000.0, 0.0, 30000.0);
+        state.popup_line_ms = bounded_setting(
+            file, "popup_line_ms", 220.0, 50.0, 2000.0);
+        state.popup_expand_ms = bounded_setting(
+            file, "popup_expand_ms", 390.0, 50.0, 2500.0);
+        state.output_close_ms = bounded_setting(
+            file, "output_close_ms", 2000.0, 0.0, 30000.0);
+    }
+    g_key_file_unref(file);
+    g_free(path);
+}
+
+void save_settings() {
+    gchar* directory = g_build_filename(g_get_user_config_dir(), "kalwer", nullptr);
+    if (g_mkdir_with_parents(directory, 0700) != 0) {
+        g_free(directory);
+        return;
+    }
+    gchar* path = g_build_filename(directory, "settings-v1.ini", nullptr);
+    GKeyFile* file = g_key_file_new();
+    g_key_file_set_double(file, "timing", "prompt_retention_ms",
+                          state.prompt_retention_ms);
+    g_key_file_set_double(file, "timing", "popup_line_ms", state.popup_line_ms);
+    g_key_file_set_double(file, "timing", "popup_expand_ms", state.popup_expand_ms);
+    g_key_file_set_double(file, "timing", "output_close_ms", state.output_close_ms);
+    gsize length = 0;
+    gchar* contents = g_key_file_to_data(file, &length, nullptr);
+    if (contents && g_file_set_contents(path, contents, length, nullptr)) g_chmod(path, 0600);
+    g_free(contents);
+    g_key_file_unref(file);
     g_free(path);
     g_free(directory);
 }
@@ -1079,11 +1139,13 @@ void mark_output_finished(int exit_status) {
     state.output_exit_status = exit_status;
     if (state.output_status) {
         const std::string label = "EXIT " + std::to_string(exit_status) +
-            (state.output_interacted ? " · PIN" : " · 2s");
+            (state.output_interacted ? " · PIN" : " · AUTO");
         gtk_label_set_text(GTK_LABEL(state.output_status), label.c_str());
     }
     if (!state.output_interacted && !state.output_close_source) {
-        state.output_close_source = g_timeout_add(2000, close_output_timeout, nullptr);
+        state.output_close_source = g_timeout_add(
+            static_cast<guint>(std::max(1.0, state.output_close_ms)),
+            close_output_timeout, nullptr);
     }
 }
 
@@ -1109,9 +1171,12 @@ gboolean close_output_timeout(gpointer) {
 
 gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
     const double elapsed = (g_get_monotonic_time() - state.output_opened_us) / 1000.0;
-    const double line_progress = ease_out_cubic_cpu(elapsed / 220.0);
-    const double detach_progress = ease_out_cubic_cpu((elapsed - 245.0) / 120.0);
-    const double unfold_progress = ease_out_cubic_cpu((elapsed - 390.0) / 390.0);
+    const double detach_start = state.popup_line_ms + 25.0;
+    const double unfold_start = detach_start + 145.0;
+    const double line_progress = ease_out_cubic_cpu(elapsed / state.popup_line_ms);
+    const double detach_progress = ease_out_cubic_cpu((elapsed - detach_start) / 120.0);
+    const double unfold_progress = ease_out_cubic_cpu(
+        (elapsed - unfold_start) / state.popup_expand_ms);
     const double line_start = 18.0 * detach_progress;
     const double line_end = line_start + (kOutputWidth - 26.0) * line_progress;
     constexpr double hinge_y = 18.0;
@@ -1144,15 +1209,19 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
 gboolean output_animation_tick(GtkWidget*, GdkFrameClock* clock, gpointer) {
     const double elapsed = (gdk_frame_clock_get_frame_time(clock) -
                             state.output_opened_us) / 1000.0;
+    const double unfold_start = state.popup_line_ms + 170.0;
     if (state.output_canvas) gtk_widget_queue_draw(state.output_canvas);
     if (state.output_content) {
-        const double unfold = ease_out_cubic_cpu((elapsed - 390.0) / 390.0);
+        const double unfold = ease_out_cubic_cpu(
+            (elapsed - unfold_start) / state.popup_expand_ms);
         const int content_height = std::max(
             1, static_cast<int>((kOutputHeight - 33.0) * unfold));
         gtk_widget_set_size_request(state.output_content, -1, content_height);
         gtk_widget_set_opacity(state.output_content, unfold > 0.0 ? 1.0 : 0.0);
     }
-    if (elapsed < 820.0) return G_SOURCE_CONTINUE;
+    if (elapsed < unfold_start + state.popup_expand_ms + 40.0) {
+        return G_SOURCE_CONTINUE;
+    }
 
     state.output_animation_source = 0;
     if (state.output_content) gtk_widget_set_opacity(state.output_content, 1.0);
@@ -1823,9 +1892,152 @@ void show_local_results(std::vector<Result> results) {
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
 
+void clear_settings_widgets() {
+    state.settings_window = nullptr;
+    state.settings_prompt_retention = nullptr;
+    state.settings_popup_line = nullptr;
+    state.settings_popup_expand = nullptr;
+    state.settings_output_close = nullptr;
+}
+
+void close_settings_window() {
+    if (state.settings_window) gtk_widget_destroy(state.settings_window);
+    if (!state.resident && state.app) g_application_quit(G_APPLICATION(state.app));
+}
+
+void save_settings_window(GtkButton*, gpointer) {
+    state.prompt_retention_ms = gtk_spin_button_get_value(
+        GTK_SPIN_BUTTON(state.settings_prompt_retention));
+    state.popup_line_ms = gtk_spin_button_get_value(
+        GTK_SPIN_BUTTON(state.settings_popup_line));
+    state.popup_expand_ms = gtk_spin_button_get_value(
+        GTK_SPIN_BUTTON(state.settings_popup_expand));
+    state.output_close_ms = gtk_spin_button_get_value(
+        GTK_SPIN_BUTTON(state.settings_output_close));
+    save_settings();
+    close_settings_window();
+}
+
+gboolean on_settings_key(GtkWidget*, GdkEventKey* event, gpointer) {
+    if (event->keyval != GDK_KEY_Escape) return FALSE;
+    close_settings_window();
+    return TRUE;
+}
+
+GtkWidget* settings_spin(double value, double minimum, double maximum,
+                         double step, double page) {
+    GtkAdjustment* adjustment = gtk_adjustment_new(
+        value, minimum, maximum, step, page, 0.0);
+    GtkWidget* spin = gtk_spin_button_new(adjustment, 1.0, 0);
+    gtk_widget_set_size_request(spin, 118, 34);
+    gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(spin), TRUE);
+    return spin;
+}
+
+void add_settings_row(GtkGrid* grid, int row, const char* title,
+                      const char* detail, GtkWidget* control) {
+    GtkWidget* labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    GtkWidget* heading = gtk_label_new(title);
+    GtkWidget* explanation = gtk_label_new(detail);
+    gtk_widget_set_halign(heading, GTK_ALIGN_START);
+    gtk_widget_set_halign(explanation, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(heading), "setting-title");
+    gtk_style_context_add_class(gtk_widget_get_style_context(explanation), "setting-detail");
+    gtk_box_pack_start(GTK_BOX(labels), heading, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(labels), explanation, FALSE, FALSE, 0);
+    gtk_grid_attach(grid, labels, 0, row, 1, 1);
+    gtk_grid_attach(grid, control, 1, row, 1, 1);
+}
+
+void show_settings_window() {
+    if (state.settings_window) {
+        gtk_window_present(GTK_WINDOW(state.settings_window));
+        return;
+    }
+    if (state.window) gtk_widget_hide(state.window);
+
+    state.settings_window = gtk_application_window_new(state.app);
+    gtk_widget_set_name(state.settings_window, "kalwer-settings");
+    gtk_window_set_title(GTK_WINDOW(state.settings_window), "Kalwer Settings");
+    gtk_window_set_default_size(GTK_WINDOW(state.settings_window), 520, 350);
+    gtk_window_set_resizable(GTK_WINDOW(state.settings_window), FALSE);
+    gtk_window_set_decorated(GTK_WINDOW(state.settings_window), FALSE);
+    gtk_window_set_position(GTK_WINDOW(state.settings_window), GTK_WIN_POS_CENTER);
+    gtk_window_set_keep_above(GTK_WINDOW(state.settings_window), TRUE);
+    gtk_widget_add_events(state.settings_window, GDK_KEY_PRESS_MASK);
+
+    GtkCssProvider* css = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(css,
+        "#kalwer-settings { background: #00130b; border: 2px solid #4fd079; }"
+        "#kalwer-settings label { color: #cfe3d2; font-family: 'JetBrainsMono Nerd Font'; }"
+        "#kalwer-settings .settings-kicker { color: #4fae78; font-size: 10px; font-weight: bold; }"
+        "#kalwer-settings .settings-heading { color: #9ee8b4; font-size: 20px; font-weight: bold; }"
+        "#kalwer-settings .setting-title { color: #cfe3d2; font-size: 13px; font-weight: bold; }"
+        "#kalwer-settings .setting-detail { color: #76aa85; font-size: 10px; }"
+        "#kalwer-settings spinbutton { color: #cfe3d2; background: #001a0e; border: 1px solid #4fae78; border-radius: 0; }"
+        "#kalwer-settings spinbutton button { color: #9ee8b4; background: #002414; border: 0; }"
+        "#kalwer-settings button.save { color: #00130b; background: #6cd590; border: 0; border-radius: 0; font-weight: bold; padding: 9px 18px; }",
+        -1, nullptr);
+    gtk_style_context_add_provider_for_screen(
+        gtk_widget_get_screen(state.settings_window), GTK_STYLE_PROVIDER(css),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(css);
+
+    GtkWidget* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+    gtk_container_set_border_width(GTK_CONTAINER(outer), 22);
+    GtkWidget* kicker = gtk_label_new("KALWER / SETTINGS");
+    GtkWidget* heading = gtk_label_new("TIMING & RETENTION");
+    gtk_widget_set_halign(kicker, GTK_ALIGN_START);
+    gtk_widget_set_halign(heading, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(kicker), "settings-kicker");
+    gtk_style_context_add_class(gtk_widget_get_style_context(heading), "settings-heading");
+    gtk_box_pack_start(GTK_BOX(outer), kicker, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(outer), heading, FALSE, FALSE, 0);
+
+    GtkWidget* grid_widget = gtk_grid_new();
+    GtkGrid* grid = GTK_GRID(grid_widget);
+    gtk_grid_set_row_spacing(grid, 12);
+    gtk_grid_set_column_spacing(grid, 28);
+    state.settings_prompt_retention = settings_spin(
+        state.prompt_retention_ms, 0.0, 30000.0, 250.0, 1000.0);
+    state.settings_popup_line = settings_spin(
+        state.popup_line_ms, 50.0, 2000.0, 25.0, 100.0);
+    state.settings_popup_expand = settings_spin(
+        state.popup_expand_ms, 50.0, 2500.0, 25.0, 100.0);
+    state.settings_output_close = settings_spin(
+        state.output_close_ms, 0.0, 30000.0, 250.0, 1000.0);
+    add_settings_row(grid, 0, "PROMPT RETENTION", "Restore the last query after reopening (ms)",
+                     state.settings_prompt_retention);
+    add_settings_row(grid, 1, "PTY LINE EXTENSION", "Horizontal connector phase (ms)",
+                     state.settings_popup_line);
+    add_settings_row(grid, 2, "PTY VERTICAL EXPANSION", "Rectangle and content stretch phase (ms)",
+                     state.settings_popup_expand);
+    add_settings_row(grid, 3, "COMMAND AUTO-CLOSE", "Delay after a finished untouched command (ms)",
+                     state.settings_output_close);
+    gtk_box_pack_start(GTK_BOX(outer), grid_widget, TRUE, TRUE, 0);
+
+    GtkWidget* save = gtk_button_new_with_label("SAVE & CLOSE");
+    gtk_style_context_add_class(gtk_widget_get_style_context(save), "save");
+    gtk_widget_set_halign(save, GTK_ALIGN_END);
+    gtk_box_pack_end(GTK_BOX(outer), save, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(state.settings_window), outer);
+    g_signal_connect(save, "clicked", G_CALLBACK(save_settings_window), nullptr);
+    g_signal_connect(state.settings_window, "key-press-event",
+                     G_CALLBACK(on_settings_key), nullptr);
+    g_signal_connect(state.settings_window, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer) {
+        clear_settings_widgets();
+    }), nullptr);
+    gtk_widget_show_all(state.settings_window);
+    gtk_window_present(GTK_WINDOW(state.settings_window));
+}
+
 void activate_selection() {
     if (state.selection < 0 || state.selection >= static_cast<int>(state.results.size())) return;
     const Result result = state.results[state.selection];
+    if (result.provider == "kalwer-settings") {
+        show_settings_window();
+        return;
+    }
     if (result.provider == "kalwer-command") {
         start_command_popup(trim_copy(result.identifier));
         return;
@@ -2121,6 +2333,17 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
 void on_entry_changed(GtkEditable*, gpointer) {
     if (!state.applying_completion) clear_completion();
     const std::string input = gtk_entry_get_text(GTK_ENTRY(state.entry));
+    if (trim_copy(input) == "/settings") {
+        Result settings;
+        settings.identifier = "settings";
+        settings.text = "KALWER SETTINGS";
+        settings.subtext = "TIMING · RETENTION";
+        settings.icon = "preferences-system";
+        settings.provider = "kalwer-settings";
+        settings.action = "open";
+        show_local_results({std::move(settings)});
+        return;
+    }
     if (!input.empty() && input.front() == '<') {
         show_local_results(background_job_results(input.substr(1)));
         return;
@@ -2237,7 +2460,8 @@ void show_popup() {
     const gint64 now = g_get_monotonic_time();
     const std::string previous_query = gtk_entry_get_text(GTK_ENTRY(state.entry));
     const bool restore_recent = state.hidden_us > 0 && !previous_query.empty() &&
-                                now - state.hidden_us <= 3000000;
+                                now - state.hidden_us <=
+                                    static_cast<gint64>(state.prompt_retention_ms * 1000.0);
     if (!restore_recent) {
         gtk_entry_set_text(GTK_ENTRY(state.entry), "");
         state.results.clear();
@@ -2358,6 +2582,7 @@ void cleanup() {
 
 int main(int argc, char** argv) {
     load_favorites();
+    load_settings();
     std::vector<char*> filtered_arguments;
     filtered_arguments.reserve(argc + 1);
     filtered_arguments.push_back(argv[0]);

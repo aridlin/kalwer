@@ -59,6 +59,8 @@ application ID toggles the window without constructing a new GTK process.
   reduced fraction, mixed-number, and percentage forms when applicable.
 - Reopening Kalwer within three seconds restores the exact query, result
   selection, and scroll position.
+- `/settings` opens persistent controls for prompt retention, the PTY connector
+  and vertical-expansion durations, and the finished-command auto-close delay.
 
 ![Kalwer calculator decimal, fraction, mixed-number and percentage results](screenshots/calculator.png)
 
@@ -116,4 +118,7 @@ supports Start Menu application discovery, fuzzy search, native edit/selection
 keys and clipboard shortcuts, scrolling, persistent Shift+Enter favourites,
 calculator queries, and `?` Google queries. The custom ConPTY command popup and
 background-job UI are still being ported; `>` currently hands the command to
-Windows Terminal (or `cmd.exe` when Terminal is unavailable).
+Windows Terminal (or `cmd.exe` when Terminal is unavailable). Its `/settings`
+screen adds the shared timing/retention controls plus a current-user autostart
+toggle; it writes only the `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`
+`Kalwer` value and never requires administrator access.

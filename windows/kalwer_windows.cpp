@@ -182,7 +182,12 @@ struct State {
     bool opening = false;
     bool render_dirty = true;
     bool hotkey_registered = false;
+    bool settings_mode = false;
     std::wstring graphics_stage;
+    std::uint32_t prompt_retention_ms = 3000;
+    std::uint32_t popup_line_ms = 220;
+    std::uint32_t popup_expand_ms = 390;
+    std::uint32_t output_close_ms = 2000;
     std::chrono::steady_clock::time_point opened_at{};
     std::chrono::steady_clock::time_point hidden_at{};
     std::wstring restored_query;
@@ -290,6 +295,87 @@ void save_favorites() {
     std::filesystem::create_directories(directory, error);
     std::ofstream output(directory / L"favorites-v1.txt", std::ios::binary | std::ios::trunc);
     for (const auto& favorite : state.favorites) output << utf8(favorite) << '\n';
+}
+
+std::uint32_t bounded_unsigned(const std::string& value, std::uint32_t fallback,
+                               std::uint32_t minimum, std::uint32_t maximum) {
+    try {
+        const unsigned long parsed = std::stoul(value);
+        return std::clamp(static_cast<std::uint32_t>(parsed), minimum, maximum);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+void load_settings() {
+    std::ifstream input(local_data_directory() / L"settings-v1.ini", std::ios::binary);
+    std::string line;
+    while (std::getline(input, line)) {
+        const size_t separator = line.find('=');
+        if (separator == std::string::npos) continue;
+        const std::string key = line.substr(0, separator);
+        const std::string value = line.substr(separator + 1);
+        if (key == "prompt_retention_ms") {
+            state.prompt_retention_ms = bounded_unsigned(value, 3000, 0, 30000);
+        } else if (key == "popup_line_ms") {
+            state.popup_line_ms = bounded_unsigned(value, 220, 50, 2000);
+        } else if (key == "popup_expand_ms") {
+            state.popup_expand_ms = bounded_unsigned(value, 390, 50, 2500);
+        } else if (key == "output_close_ms") {
+            state.output_close_ms = bounded_unsigned(value, 2000, 0, 30000);
+        }
+    }
+}
+
+void save_settings() {
+    const auto directory = local_data_directory();
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    std::ofstream output(directory / L"settings-v1.ini", std::ios::binary | std::ios::trunc);
+    output << "prompt_retention_ms=" << state.prompt_retention_ms << '\n'
+           << "popup_line_ms=" << state.popup_line_ms << '\n'
+           << "popup_expand_ms=" << state.popup_expand_ms << '\n'
+           << "output_close_ms=" << state.output_close_ms << '\n';
+}
+
+bool autostart_enabled() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return false;
+    DWORD size = 0;
+    const LONG result = RegQueryValueExW(
+        key, L"Kalwer", nullptr, nullptr, nullptr, &size);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+bool set_autostart(bool enabled) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+    LONG result = ERROR_SUCCESS;
+    if (enabled) {
+        std::vector<wchar_t> path(32768);
+        const DWORD length = GetModuleFileNameW(nullptr, path.data(),
+                                                static_cast<DWORD>(path.size()));
+        if (!length || length >= path.size()) {
+            RegCloseKey(key);
+            return false;
+        }
+        const std::wstring command = L"\"" + std::wstring(path.data(), length) + L"\"";
+        result = RegSetValueExW(key, L"Kalwer", 0, REG_SZ,
+            reinterpret_cast<const BYTE*>(command.c_str()),
+            static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+    } else {
+        result = RegDeleteValueW(key, L"Kalwer");
+        if (result == ERROR_FILE_NOT_FOUND) result = ERROR_SUCCESS;
+    }
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
 }
 
 bool is_favorite(const AppEntry& entry) {
@@ -412,12 +498,59 @@ std::optional<AppEntry> calculator_result(const std::wstring& query) {
     return result;
 }
 
+void update_results();
+
+void adjust_setting(int direction) {
+    if (!direction) return;
+    auto adjust = [direction](std::uint32_t value, std::uint32_t step,
+                              std::uint32_t minimum, std::uint32_t maximum) {
+        const long long next = static_cast<long long>(value) +
+                               static_cast<long long>(direction) * step;
+        return static_cast<std::uint32_t>(std::clamp(
+            next, static_cast<long long>(minimum), static_cast<long long>(maximum)));
+    };
+    switch (state.selection) {
+        case 0:
+            set_autostart(!autostart_enabled());
+            break;
+        case 1:
+            state.prompt_retention_ms = adjust(
+                state.prompt_retention_ms, 250, 0, 30000);
+            break;
+        case 2:
+            state.popup_line_ms = adjust(state.popup_line_ms, 25, 50, 2000);
+            break;
+        case 3:
+            state.popup_expand_ms = adjust(state.popup_expand_ms, 25, 50, 2500);
+            break;
+        case 4:
+            state.output_close_ms = adjust(state.output_close_ms, 250, 0, 30000);
+            break;
+        default:
+            return;
+    }
+    save_settings();
+    state.render_dirty = true;
+}
+
+void leave_settings() {
+    state.settings_mode = false;
+    update_results();
+    SetFocus(state.edit);
+}
+
 void update_results() {
     const std::wstring raw_query = window_text(state.edit);
     const std::wstring query = lower_copy(trim_copy(raw_query));
     std::vector<AppEntry> filtered;
 
-    if (const auto calculation = calculator_result(query)) {
+    if (query == L"/settings") {
+        AppEntry settings;
+        settings.title = L"KALWER SETTINGS";
+        settings.subtitle = L"AUTOSTART · TIMING · RETENTION";
+        settings.link = L"::settings";
+        filtered.push_back(std::move(settings));
+    } else if (const auto calculation = calculator_result(query)) {
         filtered.push_back(*calculation);
     } else if (!query.empty() && query.front() == L'?') {
         AppEntry google;
@@ -456,6 +589,12 @@ void update_results() {
 }
 
 void move_selection(int delta) {
+    if (state.settings_mode) {
+        state.selection = std::clamp(state.selection + delta, 0, 4);
+        state.scroll_offset = 0;
+        state.render_dirty = true;
+        return;
+    }
     if (state.results.empty()) return;
     state.selection = std::clamp(state.selection + delta, 0,
                                  static_cast<int>(state.results.size()) - 1);
@@ -488,6 +627,14 @@ void hide_launcher();
 void activate_selection() {
     if (state.results.empty()) return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
+    if (result.link == L"::settings") {
+        state.settings_mode = true;
+        state.selection = 0;
+        state.scroll_offset = 0;
+        state.selection_visual = 0.0f;
+        state.render_dirty = true;
+        return;
+    }
     if (result.link == L"::calculator") {
         if (OpenClipboard(state.window)) {
             EmptyClipboard();
@@ -905,9 +1052,11 @@ void draw_search() {
                                  D2D1::Point2F(53.5f, 57.5f), render.brush.Get(), 2.0f);
     draw_text(L"KALWER", render.tiny_format.Get(), 67, 17, 260, 30,
               color(0.30f, 0.68f, 0.47f));
-    draw_text(L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO",
-              render.tiny_format.Get(), 350, 58, 625, 72,
-              color(0.46f, 0.67f, 0.52f));
+    const wchar_t* help = state.settings_mode
+        ? L"← → CHANGE   ENTER APPLY   ESC BACK"
+        : L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
+    draw_text(help, render.tiny_format.Get(), state.settings_mode ? 385.0f : 350.0f,
+              58, 625, 72, color(0.46f, 0.67f, 0.52f));
 
     const std::wstring query = window_text(state.edit);
     const std::wstring display = query.empty() ? L"SEARCH THE VAULT" : query;
@@ -957,7 +1106,54 @@ void draw_search() {
     }
 }
 
+void draw_settings() {
+    auto& render = state.render;
+    fill_round(kSearchX, kResultsY - 6, kSearchX + kSearchWidth,
+               kLogicalHeight - 4.0f, 12.0f, color(0.0f, 0.075f, 0.043f, 0.94f));
+    const std::wstring titles[] = {
+        L"START KALWER AT SIGN-IN",
+        L"PROMPT RETENTION",
+        L"PTY LINE EXTENSION",
+        L"PTY VERTICAL EXPANSION",
+        L"COMMAND AUTO-CLOSE",
+    };
+    const std::wstring details[] = {
+        L"Current-user startup entry; no administrator access",
+        L"Restore the previous query after reopening",
+        L"Horizontal connector animation phase",
+        L"Rectangle and terminal-content stretch phase",
+        L"Delay after an untouched command finishes",
+    };
+    const std::wstring values[] = {
+        autostart_enabled() ? L"ON" : L"OFF",
+        std::to_wstring(state.prompt_retention_ms) + L" MS",
+        std::to_wstring(state.popup_line_ms) + L" MS",
+        std::to_wstring(state.popup_expand_ms) + L" MS",
+        std::to_wstring(state.output_close_ms) + L" MS",
+    };
+    for (int row = 0; row < 5; ++row) {
+        const float y = kResultsY + row * kRowPitch;
+        const bool selected = state.selection == row;
+        fill_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+                   selected ? color(0.02f, 0.20f, 0.105f, 0.97f)
+                            : color(0.0f, 0.105f, 0.057f, 0.90f));
+        stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+                     selected ? 2.0f : 1.0f,
+                     color(0.31f, 0.68f, 0.47f, selected ? 0.90f : 0.20f));
+        draw_text(titles[row], render.title_format.Get(), kResultX + 18, y + 8,
+                  kResultX + 445, y + 31, color(0.81f, 0.89f, 0.82f));
+        draw_text(details[row], render.subtitle_format.Get(), kResultX + 18, y + 33,
+                  kResultX + 475, y + 53, color(0.46f, 0.67f, 0.52f));
+        draw_text(values[row], render.title_format.Get(), kResultX + 474, y + 18,
+                  kResultX + 583, y + 43, color(0.62f, 0.91f, 0.70f));
+    }
+}
+
 void draw_results() {
+    if (state.settings_mode) {
+        draw_settings();
+        return;
+    }
     auto& render = state.render;
     fill_round(kSearchX, kResultsY - 6, kSearchX + kSearchWidth,
                kLogicalHeight - 4.0f, 12.0f, color(0.0f, 0.075f, 0.043f, 0.88f));
@@ -1114,8 +1310,10 @@ HRESULT position_and_resize() {
 void show_launcher() {
     const auto now = std::chrono::steady_clock::now();
     const bool restore = !state.restored_query.empty() &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - state.hidden_at).count() <= 3000;
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - state.hidden_at).count() <=
+            state.prompt_retention_ms;
     if (!restore) {
+        state.settings_mode = false;
         state.restored_query.clear();
         set_window_text_preserving_end(state.edit, L"");
         update_results();
@@ -1156,6 +1354,17 @@ void hide_launcher() {
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_KEYDOWN) {
+        if (state.settings_mode) {
+            switch (wparam) {
+                case VK_UP: move_selection(-1); return 0;
+                case VK_DOWN: move_selection(1); return 0;
+                case VK_LEFT: adjust_setting(-1); return 0;
+                case VK_RIGHT: adjust_setting(1); return 0;
+                case VK_RETURN: adjust_setting(1); return 0;
+                case VK_ESCAPE: leave_settings(); return 0;
+                default: return 0;
+            }
+        }
         switch (wparam) {
             case VK_UP: move_selection(-1); return 0;
             case VK_DOWN: move_selection(1); return 0;
@@ -1169,6 +1378,8 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             case VK_TAB: return 0;
         }
     }
+    if (state.settings_mode && (message == WM_CHAR || message == WM_PASTE ||
+                                message == WM_CUT || message == WM_CLEAR)) return 0;
     return CallWindowProcW(state.edit_proc, window, message, wparam, lparam);
 }
 
@@ -1212,7 +1423,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             const int row = static_cast<int>((logical_y - kResultsY) / kRowPitch);
             if (logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
                 const int index = state.scroll_offset + row;
-                if (index < static_cast<int>(state.results.size()) && index != state.selection) {
+                const bool valid = state.settings_mode
+                    ? index < 5 : index < static_cast<int>(state.results.size());
+                if (valid && index != state.selection) {
                     state.selection = index;
                     state.render_dirty = true;
                 }
@@ -1225,7 +1438,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             const int row = static_cast<int>((logical_y - kResultsY) / kRowPitch);
             if (logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
                 const int index = state.scroll_offset + row;
-                if (index < static_cast<int>(state.results.size())) {
+                if (state.settings_mode && index < 5) {
+                    state.selection = index;
+                    adjust_setting(1);
+                } else if (index < static_cast<int>(state.results.size())) {
                     state.selection = index;
                     activate_selection();
                 }
@@ -1293,6 +1509,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         return 1;
     }
     load_favorites();
+    load_settings();
     load_apps();
     update_results();
     state.hotkey_registered = RegisterHotKey(state.window, kHotkeyId,
