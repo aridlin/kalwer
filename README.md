@@ -14,7 +14,8 @@ comes from the finished launcher below it.
 ## Features
 
 - GPU-backed, animated halftone coverage over the fully rendered interface.
-- Scrollable Elephant application search with favourite support.
+- Scrollable Elephant application search with persistent, unlimited favourites
+  grouped above normally ranked results.
 - Interactive Zsh command sessions, background jobs, completion notifications,
   output copying, and live handoff to Ghostty.
 - Firefox Google search mode and a native precedence-aware calculator.
@@ -37,10 +38,13 @@ application ID toggles the window without constructing a new GTK process.
 - Up/Down or Ctrl+P/Ctrl+N moves the selection.
 - Left/Right, Home/End, Shift-selection, and Ctrl+A/C/X/V edit the search text.
 - Enter launches the selected result.
-- Shift+Enter favourites or unfavourites an Elephant result.
+- Shift+Enter persistently favourites or unfavourites an Elephant result and
+  immediately moves the pinned group to the top.
 - Escape closes the launcher.
 - Mouse hover and click work on result rows.
-- Mouse wheel, arrows, and Page Up/Down navigate beyond the eight visible results.
+- Five on-screen rows are interactive. Mouse wheel, arrows, and Page Up/Down
+  scroll later results into those selectable positions; the lower rows are a
+  non-interactive halftone preview.
 - `> command` runs immediately in an interactive VTE popup. Tab and Shift+Tab
   cycle Zsh-resolved command/path completions.
 - Command popups can copy output, continue the same tmux session in Ghostty, or

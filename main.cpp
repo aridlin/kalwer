@@ -1,4 +1,5 @@
 #include <gtk/gtk.h>
+#include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <pango/pangocairo.h>
 #include <epoxy/gl.h>
@@ -33,7 +34,8 @@ constexpr double kResultWidth = 600.0;
 constexpr double kRowHeight = 58.0;
 constexpr double kRowPitch = 66.0;
 constexpr int kVisibleResults = 8;
-constexpr int kQueryLimit = 64;
+constexpr int kSelectableResults = 5;
+constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 
@@ -46,6 +48,7 @@ struct Result {
     std::string action;
     std::string favorite_action;
     bool pinned = false;
+    int source_rank = 0;
     std::string fuzzy_field;
     std::vector<int> fuzzy_positions;
 };
@@ -70,6 +73,7 @@ struct State {
     GtkWidget* entry = nullptr;
     GtkIconTheme* icon_theme = nullptr;
     std::vector<Result> results;
+    std::vector<std::string> favorite_keys;
     std::unordered_map<std::string, GdkPixbuf*> icons;
     int selection = 0;
     int scroll_offset = 0;
@@ -141,6 +145,76 @@ std::string ascii_lower(std::string value) {
         return static_cast<char>(std::tolower(character));
     });
     return value;
+}
+
+std::string favorite_key(const Result& result) {
+    return result.provider + "\n" + result.identifier;
+}
+
+void load_favorites() {
+    gchar* path = g_build_filename(g_get_user_config_dir(), "kalwer", "favorites-v1", nullptr);
+    gchar* contents = nullptr;
+    gsize length = 0;
+    if (g_file_get_contents(path, &contents, &length, nullptr)) {
+        gchar** lines = g_strsplit(contents, "\n", -1);
+        for (gchar** line = lines; *line; ++line) {
+            if (!**line) continue;
+            gsize decoded_length = 0;
+            guchar* decoded = g_base64_decode(*line, &decoded_length);
+            if (decoded && decoded_length > 0) {
+                std::string key(reinterpret_cast<char*>(decoded), decoded_length);
+                if (std::find(state.favorite_keys.begin(), state.favorite_keys.end(), key) ==
+                    state.favorite_keys.end()) {
+                    state.favorite_keys.push_back(std::move(key));
+                }
+            }
+            g_free(decoded);
+        }
+        g_strfreev(lines);
+    }
+    g_free(contents);
+    g_free(path);
+}
+
+void save_favorites() {
+    gchar* directory = g_build_filename(g_get_user_config_dir(), "kalwer", nullptr);
+    if (g_mkdir_with_parents(directory, 0700) != 0) {
+        g_free(directory);
+        return;
+    }
+    gchar* path = g_build_filename(directory, "favorites-v1", nullptr);
+    std::string contents;
+    for (const std::string& key : state.favorite_keys) {
+        gchar* encoded = g_base64_encode(
+            reinterpret_cast<const guchar*>(key.data()), key.size());
+        contents.append(encoded).push_back('\n');
+        g_free(encoded);
+    }
+    if (g_file_set_contents(path, contents.data(), contents.size(), nullptr)) {
+        g_chmod(path, 0600);
+    }
+    g_free(path);
+    g_free(directory);
+}
+
+void apply_favorite_order(std::vector<Result>& results) {
+    std::unordered_map<std::string, size_t> favorite_rank;
+    favorite_rank.reserve(state.favorite_keys.size());
+    for (size_t index = 0; index < state.favorite_keys.size(); ++index) {
+        favorite_rank.emplace(state.favorite_keys[index], index);
+    }
+    for (Result& result : results) {
+        result.pinned = favorite_rank.contains(favorite_key(result));
+    }
+    std::stable_sort(results.begin(), results.end(), [&](const Result& left, const Result& right) {
+        const auto left_favorite = favorite_rank.find(favorite_key(left));
+        const auto right_favorite = favorite_rank.find(favorite_key(right));
+        const bool left_pinned = left_favorite != favorite_rank.end();
+        const bool right_pinned = right_favorite != favorite_rank.end();
+        if (left_pinned != right_pinned) return left_pinned;
+        if (left_pinned) return left_favorite->second < right_favorite->second;
+        return left.source_rank < right.source_rank;
+    });
 }
 
 void rounded_rectangle(cairo_t* cr, double x, double y, double width,
@@ -539,21 +613,27 @@ bool initialize_gl() {
             const float halftone_start = 286.0;
             float depth = clamp((point.y - halftone_start) /
                                 (logical_size.y - halftone_start), 0.0, 1.0);
+            float tapered_depth = smoothstep(0.0, 1.0, depth);
             // Windshield-frit proportions: dot diameter performs most of the
-            // taper, from an overlapping ceramic-like band to pinpoints.
-            float radius = mix(5.95, 0.35, pow(depth, 0.88));
-            // Site count also thins, but deliberately much less dramatically
-            // than radius so the field stays ordered rather than patchy.
+            // taper. Smoothstep gives the solid-to-circle handoff a flat
+            // tangent instead of an abrupt seam at the first halftone row.
+            float radius = mix(5.80, 0.42, pow(tapered_depth, 0.92));
+            // Keep the lattice complete around the handoff. Site density only
+            // starts thinning farther down and removes a restrained 16% at
+            // the bottom, with each site fading smoothly rather than popping.
+            float density_depth = smoothstep(0.28, 1.0, depth);
             float density = point.y <= halftone_start
                                 ? 1.0
-                                : 1.0 - 0.30 * pow(depth, 1.70);
+                                : 1.0 - 0.16 * pow(density_depth, 1.65);
             int bx = int(mod(column, 8.0));
             int by = int(mod(row, 8.0));
             float threshold = (float(bayer[by * 8 + bx]) + 0.5) / 64.0;
             float antialias = max(fwidth(length(point - center)), 0.65);
             float dot = 1.0 - smoothstep(radius - antialias, radius + antialias,
                                          length(point - center));
-            if (threshold > density) dot = 0.0;
+            float site_visibility = 1.0 - smoothstep(
+                density - 0.035, density + 0.035, threshold);
+            dot *= site_visibility;
 
             float reveal_front = 88.0 + ease_out_cubic(opening) *
                                  (logical_size.y - 86.0);
@@ -731,6 +811,7 @@ std::vector<Result> parse_results(const char* output) {
             }
         }
         if (!result.identifier.empty() && !result.text.empty() && !result.provider.empty()) {
+            result.source_rank = static_cast<int>(parsed.size());
             parsed.push_back(std::move(result));
         }
         g_object_unref(parser);
@@ -752,6 +833,7 @@ void query_finished(GObject* source, GAsyncResult* async_result, gpointer data) 
         state.query_failed = !ok;
         if (ok) {
             state.results = parse_results(output);
+            apply_favorite_order(state.results);
             state.selection = 0;
             state.scroll_offset = 0;
             state.selection_visual = 0.0;
@@ -1771,26 +1853,30 @@ void activate_selection() {
 
 void toggle_favorite() {
     if (state.selection < 0 || state.selection >= static_cast<int>(state.results.size())) return;
-    Result& result = state.results[state.selection];
-    if (result.favorite_action.empty()) return;
-    const std::string query = clean_field(gtk_entry_get_text(GTK_ENTRY(state.entry)));
-    const std::string request = clean_field(result.provider) + ";" +
-                                clean_field(result.identifier) + ";" +
-                                clean_field(result.favorite_action) + ";" + query + ";";
-    gchar* argv[] = {
-        const_cast<gchar*>("elephant"),
-        const_cast<gchar*>("activate"),
-        const_cast<gchar*>(request.c_str()),
-        nullptr,
-    };
-    GError* error = nullptr;
-    const gboolean spawned = g_spawn_async(
-        nullptr, argv, nullptr, G_SPAWN_SEARCH_PATH,
-        nullptr, nullptr, nullptr, &error);
-    if (error) g_error_free(error);
-    if (!spawned) return;
-    result.pinned = !result.pinned;
-    result.favorite_action = result.pinned ? "unpin" : "pin";
+    const Result chosen = state.results[state.selection];
+    if (chosen.provider.rfind("kalwer-", 0) == 0) return;
+    const std::string key = favorite_key(chosen);
+    const auto existing = std::find(
+        state.favorite_keys.begin(), state.favorite_keys.end(), key);
+    if (existing == state.favorite_keys.end()) {
+        state.favorite_keys.insert(state.favorite_keys.begin(), key);
+    } else {
+        state.favorite_keys.erase(existing);
+    }
+    save_favorites();
+    apply_favorite_order(state.results);
+    const auto selected = std::find_if(
+        state.results.begin(), state.results.end(), [&](const Result& result) {
+            return favorite_key(result) == key;
+        });
+    state.selection = selected == state.results.end()
+                          ? 0
+                          : static_cast<int>(selected - state.results.begin());
+    state.scroll_offset = std::clamp(
+        state.selection - kSelectableResults + 1, 0,
+        std::max(0, static_cast<int>(state.results.size()) - kSelectableResults));
+    if (state.selection < kSelectableResults) state.scroll_offset = 0;
+    state.selection_visual = state.selection;
     invalidate_finished();
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
@@ -1801,13 +1887,13 @@ void move_selection(int delta) {
     state.selection = std::clamp(state.selection + delta, 0, count - 1);
     if (state.selection < state.scroll_offset) {
         state.scroll_offset = state.selection;
-    } else if (state.selection >= state.scroll_offset + kVisibleResults) {
-        state.scroll_offset = state.selection - kVisibleResults + 1;
+    } else if (state.selection >= state.scroll_offset + kSelectableResults) {
+        state.scroll_offset = state.selection - kSelectableResults + 1;
     }
     if (state.selection_visual < state.scroll_offset) {
         state.selection_visual = state.scroll_offset;
-    } else if (state.selection_visual > state.scroll_offset + kVisibleResults - 1) {
-        state.selection_visual = state.scroll_offset + kVisibleResults - 1;
+    } else if (state.selection_visual > state.scroll_offset + kSelectableResults - 1) {
+        state.selection_visual = state.scroll_offset + kSelectableResults - 1;
     }
     invalidate_finished();
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
@@ -1980,12 +2066,12 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
             return TRUE;
         case GDK_KEY_Page_Up:
         case GDK_KEY_KP_Page_Up:
-            move_selection(-kVisibleResults);
+            move_selection(-kSelectableResults);
             ensure_animation();
             return TRUE;
         case GDK_KEY_Page_Down:
         case GDK_KEY_KP_Page_Down:
-            move_selection(kVisibleResults);
+            move_selection(kSelectableResults);
             ensure_animation();
             return TRUE;
         case GDK_KEY_Tab:
@@ -2062,7 +2148,7 @@ void on_entry_cursor_changed(GObject*, GParamSpec*, gpointer) {
 int pointer_result(double x, double y) {
     if (x < kResultX || x > kResultX + kResultWidth || y < kResultsY) return -1;
     const int row = static_cast<int>((y - kResultsY) / kRowPitch);
-    if (row < 0 || row >= kVisibleResults) return -1;
+    if (row < 0 || row >= kSelectableResults) return -1;
     const double local_y = y - (kResultsY + row * kRowPitch);
     const int result = state.scroll_offset + row;
     if (result >= static_cast<int>(state.results.size())) return -1;
@@ -2259,6 +2345,7 @@ void cleanup() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    load_favorites();
     std::vector<char*> filtered_arguments;
     filtered_arguments.reserve(argc + 1);
     filtered_arguments.push_back(argv[0]);
