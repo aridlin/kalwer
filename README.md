@@ -92,3 +92,28 @@ windowrule = no_shadow on, match:class elephant-field
 ```
 
 Kalwer is released under the MIT License.
+
+## Windows prototype
+
+The native Windows target lives in `windows/`. It uses Win32 for its resident
+single-instance process and global `Alt+Space` binding, Direct2D/DirectWrite to
+render the complete launcher, and Direct3D 11 plus DirectComposition to apply
+the same GPU halftone coverage mask to that finished interface.
+
+Cross-compile it from Linux with MinGW-w64:
+
+```sh
+cmake -S windows -B build-windows -G Ninja \
+  -DCMAKE_SYSTEM_NAME=Windows \
+  -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows
+```
+
+Run `kalwer-windows.exe` once to keep it resident. `Alt+Space` toggles it; a
+second invocation also toggles the existing instance. This early port already
+supports Start Menu application discovery, fuzzy search, native edit/selection
+keys and clipboard shortcuts, scrolling, persistent Shift+Enter favourites,
+calculator queries, and `?` Google queries. The custom ConPTY command popup and
+background-job UI are still being ported; `>` currently hands the command to
+Windows Terminal (or `cmd.exe` when Terminal is unavailable).
