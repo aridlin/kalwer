@@ -101,21 +101,6 @@ windowrule = no_shadow on, match:class elephant-field
 
 Kalwer is released under the MIT License.
 
-## bin.aridlin.pl uploader
-
-The build also produces `binup`, a small native CLI for creating
-bin.aridlin.pl bundles containing files, text panes, or both:
-
-```sh
-binup screenshot.png
-binup --text 'build notes' app.tar.zst
-printf 'piped text\n' | binup --stdin log.txt
-binup --text-file README.md kalwer.exe
-```
-
-File arguments may be repeated. So may `--text`, `--text-file`, and `--stdin`;
-the server response and authoritative bundle links are printed to stdout.
-
 ## Windows prototype
 
 The native Windows target lives in `windows/`. It uses Win32 for its resident
