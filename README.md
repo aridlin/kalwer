@@ -75,6 +75,11 @@ Elephant with the result's provider, identifier, and first/default action.
 
 ## Installation
 
+The [latest GitHub release](https://github.com/aridlin/kalwer/releases/latest)
+includes both `kalwer-linux-x86_64` and `kalwer.exe`. The Linux build is the
+normal optimized, unstripped executable and uses the GTK3/VTE runtime libraries
+listed below.
+
 On Arch Linux, install `kalwer` from the AUR. For a source build, install a C++20
 compiler plus GTK3, JSON-GLib, libepoxy, VTE3, pkgconf, and make, then run:
 

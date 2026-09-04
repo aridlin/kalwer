@@ -2452,6 +2452,18 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
     }
     if (state.settings_mode && (message == WM_CHAR || message == WM_PASTE ||
                                 message == WM_CUT || message == WM_CLEAR)) return 0;
+    if (message == WM_KEYDOWN &&
+        (wparam == VK_LEFT || wparam == VK_RIGHT || wparam == VK_HOME ||
+         wparam == VK_END ||
+         (wparam == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)))) {
+        // The hidden native edit updates its selection synchronously, but cursor-only
+        // movement does not emit EN_CHANGE. Redraw after it has handled the key so the
+        // DirectWrite caret and selection follow the native edit on this same frame.
+        const LRESULT result = CallWindowProcW(state.edit_proc, window, message,
+                                               wparam, lparam);
+        state.render_dirty = true;
+        return result;
+    }
     return CallWindowProcW(state.edit_proc, window, message, wparam, lparam);
 }
 
