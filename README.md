@@ -20,6 +20,7 @@ comes from the finished launcher below it.
   output copying, and live handoff to Ghostty.
 - Firefox Google search mode and a native precedence-aware calculator.
 - Warm resident process with three-second query and selection restoration.
+- Background GitHub release updates on both Linux and Windows.
 
 ## Build and run
 
@@ -90,8 +91,10 @@ sudo install -Dm644 kalwer.service /usr/lib/systemd/user/kalwer.service
 systemctl --user enable --now kalwer.service
 ```
 
-Optional runtime integrations are Elephant, tmux, libnotify, Firefox, Ghostty,
-and Hyprland. A typical resident activation binding is:
+The standalone Linux build uses `curl` as its background HTTPS update transport;
+package-managed installs in non-writable system directories are left to their
+package manager. Optional runtime integrations are Elephant, tmux, libnotify,
+Firefox, Ghostty, and Hyprland. A typical resident activation binding is:
 
 ```ini
 bindd = $mainMod, E, App launcher, exec, /usr/bin/gdbus call --session --dest pl.aridlin.ElephantField --object-path /pl/aridlin/ElephantField --method org.gtk.Application.Activate '{}'
@@ -131,3 +134,8 @@ with a success/failure notification on completion. `/settings` adds the shared
 timing/retention controls plus a current-user autostart toggle; it writes only
 the `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` `Kalwer` value and
 never requires administrator access. `/exit` terminates the resident instance.
+Update checks run off the input/render thread. A newer `kalwer.exe` is staged
+beside the running executable and atomically applied the next time the resident
+process starts. Both platform updaters require the matching release SHA-256 file
+and validate the executable format before installation; a failed or incomplete
+download leaves the current build intact.

@@ -15,7 +15,9 @@
 #include <numeric>
 #include <sstream>
 #include <sys/wait.h>
+#include <unistd.h>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -39,6 +41,9 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
+constexpr const char* kKalwerVersion = "0.3.0";
+constexpr const char* kLatestReleaseUrl =
+    "https://github.com/aridlin/kalwer/releases/latest";
 
 struct Result {
     std::string identifier;
@@ -79,6 +84,7 @@ struct State {
     int selection = 0;
     int scroll_offset = 0;
     double selection_visual = 0.0;
+    double scroll_visual = 0.0;
     double scroll_accumulator = 0.0;
     bool resident = false;
     bool held = false;
@@ -105,6 +111,8 @@ struct State {
     GLuint gl_program = 0;
     GLuint gl_texture = 0;
     GLuint gl_vertex_array = 0;
+    int gl_texture_width = 0;
+    int gl_texture_height = 0;
     bool texture_dirty = true;
     GtkWidget* output_window = nullptr;
     GtkWidget* output_canvas = nullptr;
@@ -151,6 +159,189 @@ std::string trim_copy(std::string value) {
     if (first == std::string::npos) return {};
     const auto last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
+}
+
+std::vector<int> version_parts(const std::string& version) {
+    std::vector<int> parts;
+    std::size_t cursor = 0;
+    while (cursor < version.size()) {
+        while (cursor < version.size() && !std::isdigit(
+                   static_cast<unsigned char>(version[cursor]))) ++cursor;
+        if (cursor >= version.size()) break;
+        char* end = nullptr;
+        const long value = std::strtol(version.c_str() + cursor, &end, 10);
+        if (!end || end == version.c_str() + cursor) break;
+        parts.push_back(static_cast<int>(std::min<long>(value, 1000000)));
+        cursor = static_cast<std::size_t>(end - version.c_str());
+        if (cursor < version.size() && version[cursor] != '.') break;
+        ++cursor;
+    }
+    return parts;
+}
+
+bool version_is_newer(const std::string& candidate, const std::string& current) {
+    std::vector<int> left = version_parts(candidate);
+    std::vector<int> right = version_parts(current);
+    const std::size_t count = std::max(left.size(), right.size());
+    left.resize(count);
+    right.resize(count);
+    return left > right;
+}
+
+bool run_capture(gchar* const argv[], std::string& output) {
+    gchar* standard_output = nullptr;
+    gchar* standard_error = nullptr;
+    gint status = 0;
+    GError* error = nullptr;
+    const gboolean launched = g_spawn_sync(
+        nullptr, const_cast<gchar**>(argv), nullptr, G_SPAWN_SEARCH_PATH,
+        nullptr, nullptr, &standard_output, &standard_error, &status, &error);
+    const bool okay = launched && g_spawn_check_wait_status(status, nullptr);
+    if (okay && standard_output) output = standard_output;
+    g_free(standard_output);
+    g_free(standard_error);
+    if (error) g_error_free(error);
+    return okay;
+}
+
+void check_for_update() {
+    gchar* curl = g_find_program_in_path("curl");
+    if (!curl) return;
+    GError* path_error = nullptr;
+    gchar* executable_raw = g_file_read_link("/proc/self/exe", &path_error);
+    if (!executable_raw) {
+        if (path_error) g_error_free(path_error);
+        g_free(curl);
+        return;
+    }
+    const std::string executable = executable_raw;
+    gchar* directory = g_path_get_dirname(executable_raw);
+    const bool writable = directory && g_access(directory, W_OK) == 0;
+    g_free(directory);
+    g_free(executable_raw);
+    if (!writable) {
+        g_free(curl);
+        return;
+    }
+
+    std::string effective_url;
+    gchar* check_argv[] = {
+        curl,
+        const_cast<gchar*>("--fail"),
+        const_cast<gchar*>("--silent"),
+        const_cast<gchar*>("--show-error"),
+        const_cast<gchar*>("--location"),
+        const_cast<gchar*>("--connect-timeout"),
+        const_cast<gchar*>("4"),
+        const_cast<gchar*>("--max-time"),
+        const_cast<gchar*>("15"),
+        const_cast<gchar*>("--output"),
+        const_cast<gchar*>("/dev/null"),
+        const_cast<gchar*>("--write-out"),
+        const_cast<gchar*>("%{url_effective}"),
+        const_cast<gchar*>(kLatestReleaseUrl),
+        nullptr,
+    };
+    if (!run_capture(check_argv, effective_url)) {
+        g_free(curl);
+        return;
+    }
+    effective_url = trim_copy(effective_url);
+    const std::string marker = "/tag/v";
+    const std::size_t marker_at = effective_url.rfind(marker);
+    if (marker_at == std::string::npos) {
+        g_free(curl);
+        return;
+    }
+    const std::string version = effective_url.substr(marker_at + marker.size());
+    if (!version_is_newer(version, kKalwerVersion)) {
+        g_free(curl);
+        return;
+    }
+
+    const std::string download =
+        "https://github.com/aridlin/kalwer/releases/download/v" + version +
+        "/kalwer-linux-x86_64";
+    const std::string checksum_url = download + ".sha256";
+    std::string checksum_text;
+    gchar* checksum_argv[] = {
+        curl,
+        const_cast<gchar*>("--fail"),
+        const_cast<gchar*>("--silent"),
+        const_cast<gchar*>("--show-error"),
+        const_cast<gchar*>("--location"),
+        const_cast<gchar*>("--connect-timeout"),
+        const_cast<gchar*>("4"),
+        const_cast<gchar*>("--max-time"),
+        const_cast<gchar*>("15"),
+        const_cast<gchar*>("--max-filesize"),
+        const_cast<gchar*>("4096"),
+        const_cast<gchar*>(checksum_url.c_str()),
+        nullptr,
+    };
+    if (!run_capture(checksum_argv, checksum_text)) {
+        g_free(curl);
+        return;
+    }
+    checksum_text = trim_copy(checksum_text);
+    const std::size_t separator = checksum_text.find_first_of(" \t\r\n");
+    std::string expected_checksum = checksum_text.substr(0, separator);
+    std::transform(expected_checksum.begin(), expected_checksum.end(),
+                   expected_checksum.begin(), [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    if (expected_checksum.size() != 64 ||
+        !std::all_of(expected_checksum.begin(), expected_checksum.end(), [](char character) {
+            return std::isxdigit(static_cast<unsigned char>(character));
+        })) {
+        g_free(curl);
+        return;
+    }
+    const std::string temporary = executable + ".update";
+    gchar* download_argv[] = {
+        curl,
+        const_cast<gchar*>("--fail"),
+        const_cast<gchar*>("--silent"),
+        const_cast<gchar*>("--show-error"),
+        const_cast<gchar*>("--location"),
+        const_cast<gchar*>("--connect-timeout"),
+        const_cast<gchar*>("4"),
+        const_cast<gchar*>("--max-time"),
+        const_cast<gchar*>("120"),
+        const_cast<gchar*>("--max-filesize"),
+        const_cast<gchar*>("67108864"),
+        const_cast<gchar*>("--output"),
+        const_cast<gchar*>(temporary.c_str()),
+        const_cast<gchar*>(download.c_str()),
+        nullptr,
+    };
+    std::string ignored;
+    if (!run_capture(download_argv, ignored)) {
+        g_unlink(temporary.c_str());
+        g_free(curl);
+        return;
+    }
+    gchar* bytes = nullptr;
+    gsize length = 0;
+    const bool read = g_file_get_contents(temporary.c_str(), &bytes, &length, nullptr);
+    gchar* actual_checksum = read ? g_compute_checksum_for_data(
+        G_CHECKSUM_SHA256, reinterpret_cast<const guchar*>(bytes), length) : nullptr;
+    const bool checksum_matches = actual_checksum && expected_checksum == actual_checksum;
+    const bool is_elf = read &&
+                        length > 20 && static_cast<unsigned char>(bytes[0]) == 0x7f &&
+                        bytes[1] == 'E' && bytes[2] == 'L' && bytes[3] == 'F' &&
+                        static_cast<unsigned char>(bytes[18]) == 0x3e && bytes[19] == 0;
+    g_free(actual_checksum);
+    g_free(bytes);
+    if (!checksum_matches || !is_elf || g_chmod(temporary.c_str(), 0755) != 0 ||
+        g_rename(temporary.c_str(), executable.c_str()) != 0) {
+        g_unlink(temporary.c_str());
+    }
+    g_free(curl);
+}
+
+void start_update_check() {
+    std::thread(check_for_update).detach();
 }
 
 std::string ascii_lower(std::string value) {
@@ -494,11 +685,17 @@ void draw_results(cairo_t* cr) {
     cairo_set_source_rgba(cr, 0.0, 0.075, 0.043, 0.88);
     cairo_fill(cr);
 
+    cairo_save(cr);
+    cairo_rectangle(cr, kSearchX, kResultsY - 2,
+                    kSearchWidth, kWindowHeight - kResultsY - 2);
+    cairo_clip(cr);
+    const int first_drawn = std::max(0, static_cast<int>(std::floor(state.scroll_visual)));
     const int visible_end = std::min<int>(
-        static_cast<int>(state.results.size()), state.scroll_offset + kVisibleResults);
-    for (int index = state.scroll_offset; index < visible_end; ++index) {
+        static_cast<int>(state.results.size()),
+        static_cast<int>(std::ceil(state.scroll_visual)) + kVisibleResults + 1);
+    for (int index = first_drawn; index < visible_end; ++index) {
         const Result& result = state.results[index];
-        const int display_row = index - state.scroll_offset;
+        const double display_row = index - state.scroll_visual;
         const double y = kResultsY + display_row * kRowPitch;
         rounded_rectangle(cr, kResultX, y, kResultWidth, kRowHeight, 10);
         // Selection is composited by the GL shader. Keeping it out of the
@@ -536,6 +733,7 @@ void draw_results(cairo_t* cr) {
         draw_layout(cr, rank, kResultX + kResultWidth - 31, y + 21,
                     "JetBrainsMono Nerd Font Bold 8", 0.30, 0.68, 0.47);
     }
+    cairo_restore(cr);
 
     if (state.results.empty()) {
         const char* message = state.query_failed ? "ELEPHANT IS UNAVAILABLE"
@@ -543,14 +741,14 @@ void draw_results(cairo_t* cr) {
                                                     : "NO RESULTS";
         draw_layout(cr, message, 42, kResultsY + 16,
                     "JetBrainsMono Nerd Font Bold 8.5", 0.30, 0.68, 0.47);
-    } else if (state.results.size() > kVisibleResults) {
+    } else if (state.results.size() > kSelectableResults) {
         const double track_y = kResultsY + 5;
         const double track_height = kVisibleResults * kRowPitch - 14;
-        const double fraction = static_cast<double>(kVisibleResults) / state.results.size();
+        const double fraction = static_cast<double>(kSelectableResults) / state.results.size();
         const double thumb_height = std::max(26.0, track_height * fraction);
-        const int maximum_offset = static_cast<int>(state.results.size()) - kVisibleResults;
+        const int maximum_offset = static_cast<int>(state.results.size()) - kSelectableResults;
         const double thumb_y = track_y + (track_height - thumb_height) *
-            (maximum_offset > 0 ? static_cast<double>(state.scroll_offset) / maximum_offset : 0.0);
+            (maximum_offset > 0 ? state.scroll_visual / maximum_offset : 0.0);
         rounded_rectangle(cr, kSearchX + kSearchWidth - 7, track_y, 2.5, track_height, 1.25);
         cairo_set_source_rgba(cr, 0.30, 0.68, 0.47, 0.18);
         cairo_fill(cr);
@@ -558,6 +756,20 @@ void draw_results(cairo_t* cr) {
         cairo_set_source_rgba(cr, 0.46, 0.82, 0.57, 0.80);
         cairo_fill(cr);
     }
+}
+
+void repaint_finished_surface() {
+    if (!state.finished_surface) return;
+    cairo_t* cr = cairo_create(state.finished_surface);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    draw_search(cr);
+    draw_results(cr);
+    cairo_destroy(cr);
+    cairo_surface_flush(state.finished_surface);
+    state.texture_dirty = true;
 }
 
 void ensure_surfaces(GtkWidget* widget) {
@@ -570,15 +782,7 @@ void ensure_surfaces(GtkWidget* widget) {
         state.finished_surface = cairo_image_surface_create(
             CAIRO_FORMAT_ARGB32, kWindowWidth * scale, kWindowHeight * scale);
         cairo_surface_set_device_scale(state.finished_surface, scale, scale);
-        cairo_t* cr = cairo_create(state.finished_surface);
-        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-        cairo_set_source_rgba(cr, 0, 0, 0, 0);
-        cairo_paint(cr);
-        cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-        draw_search(cr);
-        draw_results(cr);
-        cairo_destroy(cr);
-        cairo_surface_flush(state.finished_surface);
+        repaint_finished_surface();
     }
 }
 
@@ -779,9 +983,18 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glPixelStorei(GL_UNPACK_ROW_LENGTH,
                       cairo_image_surface_get_stride(state.finished_surface) / 4);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pixel_width, pixel_height, 0,
-                     GL_BGRA, GL_UNSIGNED_BYTE,
-                     cairo_image_surface_get_data(state.finished_surface));
+        if (state.gl_texture_width != pixel_width ||
+            state.gl_texture_height != pixel_height) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, pixel_width, pixel_height, 0,
+                         GL_BGRA, GL_UNSIGNED_BYTE,
+                         cairo_image_surface_get_data(state.finished_surface));
+            state.gl_texture_width = pixel_width;
+            state.gl_texture_height = pixel_height;
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixel_width, pixel_height,
+                            GL_BGRA, GL_UNSIGNED_BYTE,
+                            cairo_image_surface_get_data(state.finished_surface));
+        }
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         state.texture_dirty = false;
     }
@@ -794,7 +1007,7 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     glUniform1f(glGetUniformLocation(state.gl_program, "opening"), progress);
     glUniform1f(glGetUniformLocation(state.gl_program, "selection_y"),
                 static_cast<float>(kResultsY +
-                    (state.selection_visual - state.scroll_offset) * kRowPitch));
+                    (state.selection_visual - state.scroll_visual) * kRowPitch));
     glUniform1i(glGetUniformLocation(state.gl_program, "has_results"),
                 state.results.empty() ? 0 : 1);
     glUniform1i(glGetUniformLocation(state.gl_program, "closing"),
@@ -917,6 +1130,7 @@ void query_finished(GObject* source, GAsyncResult* async_result, gpointer data) 
             state.selection = 0;
             state.scroll_offset = 0;
             state.selection_visual = 0.0;
+            state.scroll_visual = 0.0;
             invalidate_finished();
             if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
         }
@@ -1906,6 +2120,7 @@ void show_local_results(std::vector<Result> results) {
     state.selection = 0;
     state.scroll_offset = 0;
     state.selection_visual = 0.0;
+    state.scroll_visual = 0.0;
     state.query_pending = false;
     state.query_failed = false;
     invalidate_finished();
@@ -2125,6 +2340,7 @@ void toggle_favorite() {
         std::max(0, static_cast<int>(state.results.size()) - kSelectableResults));
     if (state.selection < kSelectableResults) state.scroll_offset = 0;
     state.selection_visual = state.selection;
+    state.scroll_visual = state.scroll_offset;
     invalidate_finished();
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
@@ -2132,21 +2348,12 @@ void toggle_favorite() {
 void move_selection(int delta) {
     if (state.results.empty()) return;
     const int count = static_cast<int>(state.results.size());
-    const int previous_scroll = state.scroll_offset;
     state.selection = std::clamp(state.selection + delta, 0, count - 1);
     if (state.selection < state.scroll_offset) {
         state.scroll_offset = state.selection;
     } else if (state.selection >= state.scroll_offset + kSelectableResults) {
         state.scroll_offset = state.selection - kSelectableResults + 1;
     }
-    if (state.selection_visual < state.scroll_offset) {
-        state.selection_visual = state.scroll_offset;
-    } else if (state.selection_visual > state.scroll_offset + kSelectableResults - 1) {
-        state.selection_visual = state.scroll_offset + kSelectableResults - 1;
-    }
-    // A scroll changes which rows are baked into the UI texture. A selection
-    // change alone only updates the shader uniform and remains GPU-only.
-    if (state.scroll_offset != previous_scroll) invalidate_finished();
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
 
@@ -2180,14 +2387,28 @@ gboolean animation_tick(GtkWidget*, GdkFrameClock* clock, gpointer) {
         }
     }
 
-    const double target = static_cast<double>(state.selection);
-    const double difference = target - state.selection_visual;
-    if (std::abs(difference) > 0.002) {
-        state.selection_visual += difference * (1.0 - std::exp(-elapsed_ms / 52.0));
+    const double response = 1.0 - std::exp(-elapsed_ms / 72.0);
+    const double selection_target = static_cast<double>(state.selection);
+    const double selection_difference = selection_target - state.selection_visual;
+    if (std::abs(selection_difference) > 0.002) {
+        state.selection_visual += selection_difference * response;
         continue_animation = true;
     } else {
-        state.selection_visual = target;
+        state.selection_visual = selection_target;
     }
+
+    const double scroll_target = static_cast<double>(state.scroll_offset);
+    const double scroll_difference = scroll_target - state.scroll_visual;
+    bool scroll_changed = false;
+    if (std::abs(scroll_difference) > 0.002) {
+        state.scroll_visual += scroll_difference * response;
+        scroll_changed = true;
+        continue_animation = true;
+    } else if (state.scroll_visual != scroll_target) {
+        state.scroll_visual = scroll_target;
+        scroll_changed = true;
+    }
+    if (scroll_changed) repaint_finished_surface();
 
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
     if (!continue_animation) {
@@ -2436,8 +2657,10 @@ int pointer_result(double x, double y) {
     if (x < kResultX || x > kResultX + kResultWidth || y < kResultsY) return -1;
     const int row = static_cast<int>((y - kResultsY) / kRowPitch);
     if (row < 0 || row >= kSelectableResults) return -1;
-    const double local_y = y - (kResultsY + row * kRowPitch);
-    const int result = state.scroll_offset + row;
+    const double list_position = (y - kResultsY) / kRowPitch + state.scroll_visual;
+    const int result = static_cast<int>(std::floor(list_position));
+    const double local_y = (list_position - result) * kRowPitch;
+    if (result < 0) return -1;
     if (result >= static_cast<int>(state.results.size())) return -1;
     return local_y <= kRowHeight ? result : -1;
 }
@@ -2521,6 +2744,7 @@ void show_popup() {
         state.selection = 0;
         state.scroll_offset = 0;
         state.selection_visual = 0.0;
+        state.scroll_visual = 0.0;
     }
     state.scroll_accumulator = 0.0;
     state.closing = false;
@@ -2637,6 +2861,7 @@ void cleanup() {
 int main(int argc, char** argv) {
     load_favorites();
     load_settings();
+    start_update_check();
     std::vector<char*> filtered_arguments;
     filtered_arguments.reserve(argc + 1);
     filtered_arguments.push_back(argv[0]);

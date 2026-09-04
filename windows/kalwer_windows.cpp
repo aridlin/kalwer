@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <bcrypt.h>
 #include <d2d1_1.h>
 #include <d2d1helper.h>
 #include <d3d11.h>
@@ -16,12 +17,14 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wincodec.h>
+#include <winhttp.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <cstdint>
 #include <cwctype>
@@ -66,6 +69,9 @@ constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr float kCloseDurationMs = 280.0f;
+constexpr wchar_t kKalwerVersion[] = L"0.3.0";
+constexpr wchar_t kLatestReleaseUrl[] =
+    L"https://github.com/aridlin/kalwer/releases/latest";
 
 enum class PopupButton {
     none,
@@ -129,6 +135,309 @@ std::filesystem::path local_data_directory() {
 bool running_under_wine() {
     HMODULE module = GetModuleHandleW(L"ntdll.dll");
     return module && GetProcAddress(module, "wine_get_version");
+}
+
+std::filesystem::path executable_path() {
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = GetModuleFileNameW(
+        nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (!length || length >= buffer.size()) return {};
+    return std::filesystem::path(std::wstring(buffer.data(), length));
+}
+
+std::vector<int> version_parts(const std::wstring& version) {
+    std::vector<int> parts;
+    std::size_t cursor = 0;
+    while (cursor < version.size()) {
+        while (cursor < version.size() && !std::iswdigit(version[cursor])) ++cursor;
+        if (cursor >= version.size()) break;
+        wchar_t* end = nullptr;
+        const long value = std::wcstol(version.c_str() + cursor, &end, 10);
+        if (!end || end == version.c_str() + cursor) break;
+        parts.push_back(static_cast<int>(std::min<long>(value, 1000000)));
+        cursor = static_cast<std::size_t>(end - version.c_str());
+        if (cursor < version.size() && version[cursor] != L'.') break;
+        ++cursor;
+    }
+    return parts;
+}
+
+bool version_is_newer(const std::wstring& candidate, const std::wstring& current) {
+    std::vector<int> left = version_parts(candidate);
+    std::vector<int> right = version_parts(current);
+    const std::size_t count = std::max(left.size(), right.size());
+    left.resize(count);
+    right.resize(count);
+    return left > right;
+}
+
+bool http_get(const std::wstring& url, std::vector<std::uint8_t>* body,
+              std::wstring* effective_url = nullptr) {
+    URL_COMPONENTSW components{};
+    components.dwStructSize = sizeof(components);
+    wchar_t host[512]{};
+    wchar_t path[4096]{};
+    wchar_t extra[4096]{};
+    components.lpszHostName = host;
+    components.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    components.lpszUrlPath = path;
+    components.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+    components.lpszExtraInfo = extra;
+    components.dwExtraInfoLength = static_cast<DWORD>(std::size(extra));
+    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &components)) {
+        return false;
+    }
+    const std::wstring request_path =
+        std::wstring(path, components.dwUrlPathLength) +
+        std::wstring(extra, components.dwExtraInfoLength);
+    HINTERNET session = WinHttpOpen(
+        L"Kalwer/0.3 automatic updater", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) return false;
+    WinHttpSetTimeouts(session, 4000, 4000, 4000, 30000);
+    HINTERNET connection = WinHttpConnect(
+        session, std::wstring(host, components.dwHostNameLength).c_str(),
+        components.nPort, 0);
+    if (!connection) {
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    const DWORD flags = components.nScheme == INTERNET_SCHEME_HTTPS
+        ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET request = WinHttpOpenRequest(
+        connection, L"GET", request_path.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    bool okay = request &&
+        WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(request, nullptr);
+    DWORD status = 0;
+    DWORD status_size = sizeof(status);
+    if (okay) {
+        okay = WinHttpQueryHeaders(
+            request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+            WINHTTP_NO_HEADER_INDEX) && status >= 200 && status < 300;
+    }
+    if (okay && effective_url) {
+        DWORD bytes = 0;
+        WinHttpQueryOption(request, WINHTTP_OPTION_URL, nullptr, &bytes);
+        std::vector<wchar_t> resolved(bytes / sizeof(wchar_t) + 1);
+        if (bytes && WinHttpQueryOption(request, WINHTTP_OPTION_URL,
+                                        resolved.data(), &bytes)) {
+            *effective_url = resolved.data();
+        }
+    }
+    if (okay && body) {
+        body->clear();
+        for (;;) {
+            DWORD available = 0;
+            if (!WinHttpQueryDataAvailable(request, &available)) {
+                okay = false;
+                break;
+            }
+            if (!available) break;
+            const std::size_t offset = body->size();
+            if (offset + available > 64u * 1024u * 1024u) {
+                okay = false;
+                break;
+            }
+            body->resize(offset + available);
+            DWORD read = 0;
+            if (!WinHttpReadData(request, body->data() + offset, available, &read)) {
+                okay = false;
+                break;
+            }
+            body->resize(offset + read);
+        }
+    }
+    if (request) WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return okay;
+}
+
+std::string sha256_hex(const std::vector<std::uint8_t>& bytes) {
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD object_size = 0;
+    DWORD hash_size = 0;
+    DWORD received = 0;
+    std::string result;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM,
+                                    nullptr, 0) != 0 ||
+        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                          reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size),
+                          &received, 0) != 0 ||
+        BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH,
+                          reinterpret_cast<PUCHAR>(&hash_size), sizeof(hash_size),
+                          &received, 0) != 0) {
+        if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+        return result;
+    }
+    std::vector<UCHAR> object(object_size);
+    std::vector<UCHAR> digest(hash_size);
+    if (BCryptCreateHash(algorithm, &hash, object.data(), object_size,
+                         nullptr, 0, 0) == 0 &&
+        BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()),
+                       static_cast<ULONG>(bytes.size()), 0) == 0 &&
+        BCryptFinishHash(hash, digest.data(), hash_size, 0) == 0) {
+        static constexpr char digits[] = "0123456789abcdef";
+        result.reserve(digest.size() * 2);
+        for (UCHAR byte : digest) {
+            result.push_back(digits[byte >> 4]);
+            result.push_back(digits[byte & 15]);
+        }
+    }
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    return result;
+}
+
+void check_for_update() {
+    if (running_under_wine()) return;
+    const std::filesystem::path target = executable_path();
+    if (target.empty()) return;
+    std::filesystem::path pending = target;
+    pending += L".update.exe";
+    std::error_code error;
+    if (std::filesystem::exists(pending, error)) return;
+    std::filesystem::path partial = pending;
+    partial += L".partial";
+    {
+        std::ofstream probe(partial, std::ios::binary | std::ios::trunc);
+        if (!probe) return;
+    }
+    std::filesystem::remove(partial, error);
+
+    std::wstring effective;
+    if (!http_get(kLatestReleaseUrl, nullptr, &effective)) return;
+    const std::wstring marker = L"/tag/v";
+    const std::size_t marker_at = effective.rfind(marker);
+    if (marker_at == std::wstring::npos) return;
+    const std::wstring version = effective.substr(marker_at + marker.size());
+    if (!version_is_newer(version, kKalwerVersion)) return;
+
+    const std::wstring asset =
+        L"https://github.com/aridlin/kalwer/releases/download/v" + version +
+        L"/kalwer.exe";
+    std::vector<std::uint8_t> checksum_bytes;
+    if (!http_get(asset + L".sha256", &checksum_bytes)) return;
+    std::string expected_checksum(checksum_bytes.begin(), checksum_bytes.end());
+    const std::size_t separator = expected_checksum.find_first_of(" \t\r\n");
+    expected_checksum = expected_checksum.substr(0, separator);
+    std::transform(expected_checksum.begin(), expected_checksum.end(),
+                   expected_checksum.begin(), [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    if (expected_checksum.size() != 64 ||
+        !std::all_of(expected_checksum.begin(), expected_checksum.end(), [](char character) {
+            return std::isxdigit(static_cast<unsigned char>(character));
+        })) return;
+    std::vector<std::uint8_t> bytes;
+    if (!http_get(asset, &bytes) || bytes.size() < 65536 ||
+        bytes[0] != 'M' || bytes[1] != 'Z') return;
+    const std::uint32_t pe_offset =
+        static_cast<std::uint32_t>(bytes[0x3c]) |
+        (static_cast<std::uint32_t>(bytes[0x3d]) << 8) |
+        (static_cast<std::uint32_t>(bytes[0x3e]) << 16) |
+        (static_cast<std::uint32_t>(bytes[0x3f]) << 24);
+    if (static_cast<std::size_t>(pe_offset) + 6 >= bytes.size() || bytes[pe_offset] != 'P' ||
+        bytes[pe_offset + 1] != 'E' || bytes[pe_offset + 2] != 0 ||
+        bytes[pe_offset + 3] != 0 || bytes[pe_offset + 4] != 0x64 ||
+        bytes[pe_offset + 5] != 0x86) return;
+    if (sha256_hex(bytes) != expected_checksum) return;
+    {
+        std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+        if (!output) return;
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        if (!output) {
+            output.close();
+            std::filesystem::remove(partial, error);
+            return;
+        }
+    }
+    if (!MoveFileExW(partial.c_str(), pending.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::filesystem::remove(partial, error);
+    }
+}
+
+std::wstring quote_argument(const std::wstring& value) {
+    std::wstring output = L"\"";
+    std::size_t backslashes = 0;
+    for (wchar_t character : value) {
+        if (character == L'\\') {
+            ++backslashes;
+        } else {
+            if (character == L'\"') output.append(backslashes * 2 + 1, L'\\');
+            else output.append(backslashes, L'\\');
+            backslashes = 0;
+            output.push_back(character);
+        }
+    }
+    output.append(backslashes * 2, L'\\');
+    output.push_back(L'\"');
+    return output;
+}
+
+bool launch_process(std::wstring command) {
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const bool launched = CreateProcessW(
+        nullptr, command.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &startup, &process) != FALSE;
+    if (launched) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    return launched;
+}
+
+bool handle_update_bootstrap() {
+    int count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    const std::filesystem::path module = executable_path();
+    if (!arguments || module.empty()) {
+        if (arguments) LocalFree(arguments);
+        return false;
+    }
+    if (count >= 4 && std::wcscmp(arguments[1], L"--apply-update") == 0) {
+        const DWORD parent_id = static_cast<DWORD>(std::wcstoul(arguments[2], nullptr, 10));
+        const std::filesystem::path target = arguments[3];
+        if (HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parent_id)) {
+            WaitForSingleObject(parent, 30000);
+            CloseHandle(parent);
+        }
+        const bool copied = CopyFileW(module.c_str(), target.c_str(), FALSE) != FALSE;
+        launch_process(quote_argument(target.wstring()) +
+                       (copied ? L" --updated" : L""));
+        LocalFree(arguments);
+        return true;
+    }
+
+    std::filesystem::path pending = module;
+    pending += L".update.exe";
+    if (count >= 2 && std::wcscmp(arguments[1], L"--updated") == 0) {
+        std::thread([pending] {
+            for (int attempt = 0; attempt < 40; ++attempt) {
+                if (DeleteFileW(pending.c_str())) return;
+                Sleep(100);
+            }
+            MoveFileExW(pending.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+        }).detach();
+        LocalFree(arguments);
+        return false;
+    }
+    LocalFree(arguments);
+    std::error_code error;
+    if (!std::filesystem::exists(pending, error)) return false;
+    const std::wstring command = quote_argument(pending.wstring()) +
+        L" --apply-update " + std::to_wstring(GetCurrentProcessId()) + L" " +
+        quote_argument(module.wstring());
+    return launch_process(command);
 }
 
 struct AppEntry {
@@ -879,6 +1188,8 @@ void update_results() {
     state.results = std::move(filtered);
     state.selection = 0;
     state.scroll_offset = 0;
+    state.selection_visual = 0.0f;
+    state.scroll_visual = 0.0f;
     state.render_dirty = true;
 }
 
@@ -897,7 +1208,7 @@ void move_selection(int delta) {
         state.scroll_offset = state.selection - kSelectableResults + 1;
     }
     const int maximum_offset = std::max(0, static_cast<int>(state.results.size()) -
-                                           kVisibleResults);
+                                           kSelectableResults);
     state.scroll_offset = std::clamp(state.scroll_offset, 0, maximum_offset);
     state.render_dirty = true;
 }
@@ -1265,6 +1576,7 @@ void activate_selection() {
         state.selection = 0;
         state.scroll_offset = 0;
         state.selection_visual = 0.0f;
+        state.scroll_visual = 0.0f;
         state.render_dirty = true;
         return;
     }
@@ -1925,14 +2237,14 @@ void draw_results() {
     if (state.results.empty()) {
         draw_text(L"NO RESULTS", render.title_format.Get(), 42, kResultsY + 16,
                   400, kResultsY + 44, color(0.30f, 0.68f, 0.47f));
-    } else if (state.results.size() > kVisibleResults) {
+    } else if (state.results.size() > kSelectableResults) {
         const float track_y = kResultsY + 5.0f;
         const float track_height = kVisibleResults * kRowPitch - 14.0f;
-        const float fraction = static_cast<float>(kVisibleResults) / state.results.size();
+        const float fraction = static_cast<float>(kSelectableResults) / state.results.size();
         const float thumb_height = std::max(26.0f, track_height * fraction);
-        const int maximum_offset = static_cast<int>(state.results.size()) - kVisibleResults;
+        const int maximum_offset = static_cast<int>(state.results.size()) - kSelectableResults;
         const float thumb_y = track_y + (track_height - thumb_height) *
-            (maximum_offset > 0 ? static_cast<float>(state.scroll_offset) / maximum_offset : 0.0f);
+            (maximum_offset > 0 ? state.scroll_visual / maximum_offset : 0.0f);
         fill_round(kSearchX + kSearchWidth - 7, track_y,
                    kSearchX + kSearchWidth - 4.5f, track_y + track_height, 1.25f,
                    color(0.30f, 0.68f, 0.47f, 0.18f));
@@ -2290,7 +2602,7 @@ void show_launcher() {
         state.selection = std::clamp(state.restored_selection, 0,
                                      std::max(0, static_cast<int>(state.results.size()) - 1));
         state.scroll_offset = std::clamp(state.restored_scroll, 0,
-            std::max(0, static_cast<int>(state.results.size()) - kVisibleResults));
+            std::max(0, static_cast<int>(state.results.size()) - kSelectableResults));
     }
     const HRESULT resize_result = position_and_resize();
     if (FAILED(resize_result)) {
@@ -2561,9 +2873,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (!state.popup_open && logical_x >= kResultX &&
                 logical_x <= kResultX + kResultWidth && logical_y >= kResultsY &&
                 row >= 0 && row < kSelectableResults) {
-                const int index = state.scroll_offset + row;
+                const float list_position =
+                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                const int index = static_cast<int>(std::floor(list_position));
+                const float local_y = (list_position - index) * kRowPitch;
                 const bool valid = state.settings_mode
-                    ? index < 5 : index < static_cast<int>(state.results.size());
+                    ? index >= 0 && index < 5
+                    : index >= 0 && index < static_cast<int>(state.results.size()) &&
+                          local_y <= kRowHeight;
                 if (valid && index != state.selection) {
                     state.selection = index;
                     state.render_dirty = true;
@@ -2613,11 +2930,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             const int row = static_cast<int>((logical_y - kResultsY) / kRowPitch);
             if (logical_x >= kResultX && logical_x <= kResultX + kResultWidth &&
                 logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
-                const int index = state.scroll_offset + row;
+                const float list_position =
+                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                const int index = static_cast<int>(std::floor(list_position));
+                const float local_y = (list_position - index) * kRowPitch;
                 if (state.settings_mode && index < 5) {
                     state.selection = index;
                     adjust_setting(1);
-                } else if (index < static_cast<int>(state.results.size())) {
+                } else if (index >= 0 && index < static_cast<int>(state.results.size()) &&
+                           local_y <= kRowHeight) {
                     state.selection = index;
                     activate_selection();
                 }
@@ -2678,6 +2999,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    if (handle_update_bootstrap()) return 0;
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 1;
     state.instance = instance;
     state.mutex = CreateMutexW(nullptr, FALSE, L"Local\\KalwerWindowsResident-v1");
@@ -2728,6 +3050,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                      L"Kalwer can still be toggled by launching it again.");
     }
     SetTimer(state.window, kTimerId, 16, nullptr);
+    std::thread(check_for_update).detach();
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
