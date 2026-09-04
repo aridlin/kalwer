@@ -41,7 +41,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.3.0";
+constexpr const char* kKalwerVersion = "0.3.1";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1686,7 +1686,14 @@ void start_command_popup(const std::string& command,
         "font-family: 'JetBrainsMono Nerd Font'; font-size: 8px; font-weight: bold; }"
         ".kalwer-output-button { min-width: 24px; min-height: 20px; padding: 0 5px; "
         "background: #002e18; color: #9ee8b4; border: 1px solid #75d191; "
-        "border-radius: 5px; box-shadow: none; }", -1, nullptr);
+        "border-radius: 3px; box-shadow: none; "
+        "transition: background-color 90ms ease-out, color 90ms ease-out, "
+        "border-color 90ms ease-out, box-shadow 90ms ease-out; }"
+        ".kalwer-output-button:hover { background: #0e4726; color: #9ee8b4; "
+        "border-color: #9ee8b4; box-shadow: inset 0 0 0 1px rgba(158,232,180,0.12); }"
+        ".kalwer-output-button:active { background: #1f6b3e; color: #e8ffed; "
+        "border-color: #9ee8b4; box-shadow: inset 0 2px 3px rgba(0,19,11,0.72); "
+        "text-shadow: 0 1px rgba(0,19,11,0.85); }", -1, nullptr);
     gtk_style_context_add_provider_for_screen(
         gtk_widget_get_screen(state.output_window), GTK_STYLE_PROVIDER(css),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
