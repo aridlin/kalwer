@@ -1,3 +1,6 @@
+#include "../file_index.hpp"
+#include "../launcher_commands.hpp"
+#include "../update_status.hpp"
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
@@ -69,7 +72,7 @@ constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.3.1";
+constexpr wchar_t kKalwerVersion[] = L"0.4.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -294,30 +297,42 @@ std::string sha256_hex(const std::vector<std::uint8_t>& bytes) {
     return result;
 }
 
+kalwer::UpdateStatus update_status;
+std::atomic<HWND> update_window{nullptr};
+bool updated_on_launch = false;
+constexpr UINT kUpdateNoticeMessage = WM_APP + 44;
+void announce_update(const std::string& message) {
+    update_status.set(message);
+    auto* body = new std::wstring(wide(message));
+    if (!PostMessageW(update_window.load(), kUpdateNoticeMessage, 0, reinterpret_cast<LPARAM>(body))) delete body;
+}
+
 void check_for_update() {
-    if (running_under_wine()) return;
+    if (running_under_wine()) { update_status.set("Automatic updates are disabled under Wine."); return; }
     const std::filesystem::path target = executable_path();
     if (target.empty()) return;
     std::filesystem::path pending = target;
     pending += L".update.exe";
     std::error_code error;
-    if (std::filesystem::exists(pending, error)) return;
+    if (std::filesystem::exists(pending, error)) { announce_update("An update is ready. Restart Kalwer to choose when to install it."); return; }
     std::filesystem::path partial = pending;
     partial += L".partial";
     {
         std::ofstream probe(partial, std::ios::binary | std::ios::trunc);
-        if (!probe) return;
+        if (!probe) { update_status.set("This installation is not writable. Download the new version from GitHub to update it manually."); return; }
     }
     std::filesystem::remove(partial, error);
 
     std::wstring effective;
-    if (!http_get(kLatestReleaseUrl, nullptr, &effective)) return;
+    if (!http_get(kLatestReleaseUrl, nullptr, &effective)) { announce_update("Could not check GitHub for updates. Your current version is unchanged."); return; }
     const std::wstring marker = L"/tag/v";
     const std::size_t marker_at = effective.rfind(marker);
     if (marker_at == std::wstring::npos) return;
     const std::wstring version = effective.substr(marker_at + marker.size());
-    if (!version_is_newer(version, kKalwerVersion)) return;
+    if (!version_is_newer(version, kKalwerVersion)) { update_status.set("Kalwer v" + utf8(kKalwerVersion) + " is up to date."); return; }
 
+    announce_update("Kalwer v" + utf8(version) + " is available. Downloading and verifying the update…");
+    kalwer::UpdateAttempt attempt(announce_update);
     const std::wstring asset =
         L"https://github.com/aridlin/kalwer/releases/download/v" + version +
         L"/kalwer.exe";
@@ -361,6 +376,8 @@ void check_for_update() {
     if (!MoveFileExW(partial.c_str(), pending.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::filesystem::remove(partial, error);
+    } else {
+        attempt.complete("Kalwer v" + utf8(version) + " is downloaded and verified. Restart Kalwer to install it; you can choose Later at startup.");
     }
 }
 
@@ -412,15 +429,18 @@ bool handle_update_bootstrap() {
             CloseHandle(parent);
         }
         const bool copied = CopyFileW(module.c_str(), target.c_str(), FALSE) != FALSE;
-        launch_process(quote_argument(target.wstring()) +
-                       (copied ? L" --updated" : L""));
+        if (!copied) MessageBoxW(nullptr, L"Kalwer could not replace the executable. Your previous version will be opened.", L"Kalwer update failed", MB_OK | MB_ICONERROR);
+        if (!launch_process(quote_argument(target.wstring()) + (copied ? L" --updated" : L" --update-failed")))
+            MessageBoxW(nullptr, L"Please start Kalwer manually. The updater could not restart it.", L"Kalwer update", MB_OK | MB_ICONERROR);
         LocalFree(arguments);
         return true;
     }
 
     std::filesystem::path pending = module;
     pending += L".update.exe";
+    if (count >= 2 && std::wcscmp(arguments[1], L"--update-failed") == 0) { LocalFree(arguments); return false; }
     if (count >= 2 && std::wcscmp(arguments[1], L"--updated") == 0) {
+        updated_on_launch = true;
         std::thread([pending] {
             for (int attempt = 0; attempt < 40; ++attempt) {
                 if (DeleteFileW(pending.c_str())) return;
@@ -434,6 +454,8 @@ bool handle_update_bootstrap() {
     LocalFree(arguments);
     std::error_code error;
     if (!std::filesystem::exists(pending, error)) return false;
+    if (MessageBoxW(nullptr, L"A downloaded Kalwer update is ready. Install it now?\n\nChoose Cancel to keep using this version and install later.",
+                    L"Kalwer update ready", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) return false;
     const std::wstring command = quote_argument(pending.wstring()) +
         L" --apply-update " + std::to_wstring(GetCurrentProcessId()) + L" " +
         quote_argument(module.wstring());
@@ -533,6 +555,8 @@ struct State {
     std::vector<std::wstring> favorites;
     std::vector<std::unique_ptr<CommandJob>> jobs;
     CommandJob* popup_job = nullptr;
+    std::optional<kalwer::PopupDocument> popup_document;
+    size_t popup_document_scroll = 0;
     std::uint64_t next_job_id = 0;
     int selection = 0;
     int scroll_offset = 0;
@@ -572,6 +596,9 @@ struct State {
 };
 
 State state;
+kalwer_files::Index file_index;
+unsigned long long file_request = 0, file_revision = 0;
+std::wstring file_status = L"Indexing files…";
 
 void fail_message(const wchar_t* text, HRESULT code = S_OK) {
     std::wostringstream stream;
@@ -1132,18 +1159,14 @@ void update_results() {
     const std::wstring query = lower_copy(trim_copy(raw_query));
     std::vector<AppEntry> filtered;
 
-    if (query == L"/exit") {
-        AppEntry exit;
-        exit.title = L"EXIT KALWER";
-        exit.subtitle = L"STOP RESIDENT LAUNCHER";
-        exit.link = L"::exit";
-        filtered.push_back(std::move(exit));
-    } else if (query == L"/settings") {
-        AppEntry settings;
-        settings.title = L"KALWER SETTINGS";
-        settings.subtitle = L"AUTOSTART · TIMING · RETENTION";
-        settings.link = L"::settings";
-        filtered.push_back(std::move(settings));
+    if (!raw_query.empty() && raw_query.front() == L'/') {
+        for (const auto* c : kalwer::matching_commands(utf8(raw_query))) {
+            AppEntry r; r.title = wide(std::string(c->name)); r.subtitle = wide(std::string(c->description));
+            r.link = L"::slash"; r.payload = r.title; filtered.push_back(std::move(r));
+        }
+    } else if (!raw_query.empty() && raw_query.front() == L':') {
+        file_request = file_index.request(utf8(raw_query.substr(1)));
+        file_status = L"Searching indexed files…";
     } else if (!query.empty() && query.front() == L'<') {
         add_background_results(filtered, raw_query.substr(1));
     } else if (std::vector<AppEntry> calculations = calculator_results(query);
@@ -1191,6 +1214,39 @@ void update_results() {
     state.selection_visual = 0.0f;
     state.scroll_visual = 0.0f;
     state.render_dirty = true;
+}
+
+void poll_files() {
+    if (!state.edit || state.settings_mode || window_text(state.edit).substr(0, 1) != L":") return;
+    const auto reply = file_index.poll(file_revision);
+    if (reply.request != file_request || reply.revision == file_revision) return;
+    file_revision = reply.revision;
+    file_status = wide(reply.status);
+    state.results.clear();
+    for (const auto& e : reply.entries) {
+        AppEntry r;
+        r.title = wide(e.name); r.subtitle = wide(e.path);
+        r.link = kalwer_files::from_utf8(e.path);
+        state.results.push_back(std::move(r));
+    }
+    state.selection = state.scroll_offset = 0;
+    state.selection_visual = state.scroll_visual = 0;
+    state.render_dirty = true;
+}
+
+std::wstring suggested_completion() {
+    const auto input = window_text(state.edit);
+    if (input.empty()) return {};
+    if (input.front() == L'/') {
+        auto commands = kalwer::matching_commands(utf8(input));
+        if (!commands.empty()) return wide(std::string(commands[std::clamp(state.selection, 0, static_cast<int>(commands.size()) - 1)]->name));
+    }
+    if (state.selection >= 0 && state.selection < static_cast<int>(state.results.size())) {
+        const auto& r = state.results[state.selection];
+        const auto candidate = input.front() == L':' ? L":" + (input.find_first_of(L"/\\") != std::wstring::npos ? r.link.wstring() : r.title) : r.title;
+        if (lower_copy(candidate).starts_with(lower_copy(input))) return candidate;
+    }
+    return {};
 }
 
 void move_selection(int delta) {
@@ -1293,7 +1349,7 @@ void append_job_output(CommandJob& job, const char* bytes, size_t length) {
     }
 }
 
-void show_job_notification(const CommandJob& job) {
+void show_notification(const std::wstring& title, const std::wstring& body, bool failed = false) {
     NOTIFYICONDATAW notification{};
     notification.cbSize = sizeof(notification);
     notification.hWnd = state.window;
@@ -1302,25 +1358,24 @@ void show_job_notification(const CommandJob& job) {
     notification.uCallbackMessage = WM_APP + 43;
     notification.hIcon = LoadIconW(state.instance, MAKEINTRESOURCEW(1));
     if (!notification.hIcon) {
-        notification.hIcon = LoadIconW(nullptr, job.exit_code.load() == 0
-            ? IDI_INFORMATION : IDI_ERROR);
+        notification.hIcon = LoadIconW(nullptr, !failed ? IDI_INFORMATION : IDI_ERROR);
     }
-    wcsncpy(notification.szTip, L"Kalwer background commands",
+    wcsncpy(notification.szTip, L"Kalwer",
             ARRAYSIZE(notification.szTip) - 1);
     if (!state.notification_icon_added) {
         state.notification_icon_added = Shell_NotifyIconW(NIM_ADD, &notification) != FALSE;
     }
     notification.uFlags = NIF_INFO;
-    notification.dwInfoFlags = job.exit_code.load() == 0 ? NIIF_INFO : NIIF_ERROR;
-    wcsncpy(notification.szInfoTitle,
-            job.exit_code.load() == 0 ? L"Kalwer command finished"
-                                      : L"Kalwer command failed",
-            ARRAYSIZE(notification.szInfoTitle) - 1);
-    std::wstring body = job.command;
-    if (body.size() > 180) body.resize(180);
-    body += L"\nexit " + std::to_wstring(job.exit_code.load());
+    notification.dwInfoFlags = failed ? NIIF_ERROR : NIIF_INFO;
+    wcsncpy(notification.szInfoTitle, title.c_str(), ARRAYSIZE(notification.szInfoTitle) - 1);
     wcsncpy(notification.szInfo, body.c_str(), ARRAYSIZE(notification.szInfo) - 1);
     Shell_NotifyIconW(NIM_MODIFY, &notification);
+}
+
+void show_job_notification(const CommandJob& job) {
+    const bool failed = job.exit_code.load() != 0;
+    show_notification(failed ? L"Kalwer command failed" : L"Kalwer command finished",
+                      job.command.substr(0, 180) + L"\nexit " + std::to_wstring(job.exit_code.load()), failed);
 }
 
 void read_job_output(CommandJob* job) {
@@ -1457,9 +1512,7 @@ std::wstring clipboard_text() {
     return result;
 }
 
-void open_job_popup(CommandJob* job, bool reopened = false) {
-    if (!job) return;
-    state.popup_job = job;
+void open_popup_shell() {
     state.popup_open = true;
     state.popup_opened_at = std::chrono::steady_clock::now();
     state.popup_selection_anchor = 0;
@@ -1467,10 +1520,24 @@ void open_job_popup(CommandJob* job, bool reopened = false) {
     state.popup_selecting = false;
     state.popup_hover = PopupButton::none;
     state.popup_pressed = PopupButton::none;
-    job->interacted = reopened;
     state.render_dirty = true;
     position_and_resize();
     SetFocus(state.edit);
+}
+
+void open_popup(const kalwer::PopupDocument& document) {
+    state.popup_job = nullptr;
+    state.popup_document = document;
+    state.popup_document_scroll = 0;
+    open_popup_shell();
+}
+
+void open_job_popup(CommandJob* job, bool reopened = false) {
+    if (!job) return;
+    state.popup_document.reset();
+    state.popup_job = job;
+    job->interacted = reopened;
+    open_popup_shell();
 }
 
 void start_command_popup(const std::wstring& command) {
@@ -1495,6 +1562,7 @@ void write_job_input(const char* data, DWORD size) {
 }
 
 void copy_job_output() {
+    if (state.popup_document) { copy_text_to_clipboard(wide(state.popup_document->body)); return; }
     if (!state.popup_job) return;
     std::string output;
     {
@@ -1507,11 +1575,11 @@ void copy_job_output() {
 
 void close_popup(bool background, bool terminate) {
     CommandJob* job = state.popup_job;
-    if (!job) return;
-    if (background) job->background = true;
-    if (terminate && job->running.load() && job->process) TerminateProcess(job->process, 130);
+    if (background && job) job->background = true;
+    if (terminate && job && job->running.load() && job->process) TerminateProcess(job->process, 130);
     state.popup_open = false;
     state.popup_job = nullptr;
+    state.popup_document.reset();
     state.render_dirty = true;
     position_and_resize();
     hide_launcher();
@@ -1565,8 +1633,28 @@ bool launch_application(const AppEntry& result) {
 }
 
 void activate_selection() {
-    if (state.results.empty()) return;
+    if (state.results.empty() || window_text(state.edit).substr(0, 1) == L":") return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
+    if (result.link == L"::slash") {
+        const auto name = utf8(result.payload);
+        if (name == "/help") open_popup(kalwer::help());
+        else if (name == "/updates") open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()});
+        else if (name == "/about") open_popup(kalwer::about());
+        else if (name == "/exit") DestroyWindow(state.window);
+        else if (name == "/settings") {
+            state.settings_mode = true; state.selection = state.scroll_offset = 0;
+            state.selection_visual = state.scroll_visual = 0; state.render_dirty = true;
+        } else if (name == "/reindex") {
+            file_index.refresh();
+            open_popup({"FILE INDEX", "A file index refresh was requested.\n\nUse :query to search while it runs.\nNew files appear as batches are saved.\n"});
+        } else for (const auto& c : kalwer::commands) if (c.name == name) {
+            const auto replacement = wide(std::string(c.replacement));
+            SetWindowTextW(state.edit, replacement.c_str());
+            SendMessageW(state.edit, EM_SETSEL, replacement.size(), replacement.size());
+            break;
+        }
+        return;
+    }
     if (result.link == L"::exit") {
         DestroyWindow(state.window);
         return;
@@ -1602,7 +1690,7 @@ void activate_selection() {
 }
 
 void toggle_favorite() {
-    if (state.results.empty()) return;
+    if (state.results.empty() || window_text(state.edit).substr(0, 1) == L":") return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
     if (result.link.wstring().rfind(L"::", 0) == 0) return;
     const std::wstring key = lower_copy(result.link.wstring());
@@ -2130,6 +2218,14 @@ void draw_search() {
             }
         }
     }
+    DWORD ghost_start = 0, ghost_end = 0;
+    SendMessageW(state.edit, EM_GETSEL, reinterpret_cast<WPARAM>(&ghost_start), reinterpret_cast<LPARAM>(&ghost_end));
+    const auto suggestion = suggested_completion();
+    if (!query.empty() && ghost_start == query.size() && ghost_end == ghost_start && suggestion.size() > query.size()) {
+        DWRITE_TEXT_METRICS metrics{}; layout->GetMetrics(&metrics);
+        draw_text(suggestion.substr(query.size()), render.input_format.Get(), text_x + metrics.widthIncludingTrailingWhitespace,
+                  text_y, 615, 62, color(0.40f, 0.46f, 0.43f));
+    }
     set_brush(input_color);
     render.d2d_context->DrawTextLayout(D2D1::Point2F(text_x, text_y), layout.Get(),
                                         render.brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -2235,7 +2331,7 @@ void draw_results() {
     }
     render.d2d_context->PopAxisAlignedClip();
     if (state.results.empty()) {
-        draw_text(L"NO RESULTS", render.title_format.Get(), 42, kResultsY + 16,
+        draw_text(window_text(state.edit).substr(0, 1) == L":" ? file_status : L"NO RESULTS", render.title_format.Get(), 42, kResultsY + 16,
                   400, kResultsY + 44, color(0.30f, 0.68f, 0.47f));
     } else if (state.results.size() > kSelectableResults) {
         const float track_y = kResultsY + 5.0f;
@@ -2254,11 +2350,34 @@ void draw_results() {
     }
 }
 
-std::wstring popup_output_text(CommandJob& job) {
+std::wstring popup_output_text() {
     std::string output;
-    {
-        std::scoped_lock lock(job.output_mutex);
-        output = job.output;
+    if (state.popup_document) {
+        std::vector<std::wstring> rows;
+        std::wistringstream stream(wide(state.popup_document->body));
+        std::wstring line;
+        while (std::getline(stream, line)) {
+            while (line.size() > 58) {
+                size_t split = line.rfind(L' ', 58);
+                if (split == std::wstring::npos || split == 0) split = 58;
+                if (split && line[split - 1] >= 0xd800 && line[split - 1] <= 0xdbff) --split;
+                rows.push_back(line.substr(0, split));
+                line.erase(0, split);
+                if (!line.empty() && line.front() == L' ') line.erase(0, 1);
+            }
+            rows.push_back(line);
+        }
+        state.popup_document_scroll = std::min(state.popup_document_scroll, rows.empty() ? size_t(0) : rows.size() - 1);
+        std::wstring visible;
+        for (size_t i = state.popup_document_scroll; i < std::min(rows.size(), state.popup_document_scroll + 22); ++i) {
+            if (!visible.empty()) visible += L'\n';
+            visible += rows[i];
+        }
+        return visible;
+    }
+    if (state.popup_job) {
+        std::scoped_lock lock(state.popup_job->output_mutex);
+        output = state.popup_job->output;
     }
     std::vector<std::string> lines;
     std::istringstream stream(output);
@@ -2267,7 +2386,7 @@ std::wstring popup_output_text(CommandJob& job) {
     constexpr size_t maximum_lines = 22;
     const size_t first = lines.size() > maximum_lines ? lines.size() - maximum_lines : 0;
     std::string visible;
-    for (size_t index = first; index < lines.size(); ++index) {
+    for (size_t index = first; index < std::min(lines.size(), first + maximum_lines); ++index) {
         if (index != first) visible.push_back('\n');
         visible += lines[index];
     }
@@ -2275,8 +2394,8 @@ std::wstring popup_output_text(CommandJob& job) {
 }
 
 UINT32 popup_text_index_at(float logical_x, float logical_y) {
-    if (!state.popup_job) return 0;
-    const std::wstring output = popup_output_text(*state.popup_job);
+    if (!state.popup_open) return 0;
+    const std::wstring output = popup_output_text();
     if (output.empty()) return 0;
     constexpr float panel_left = kLogicalWidth + 28.0f;
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
@@ -2296,8 +2415,8 @@ UINT32 popup_text_index_at(float logical_x, float logical_y) {
 }
 
 void copy_popup_selection() {
-    if (!state.popup_job) return;
-    const std::wstring output = popup_output_text(*state.popup_job);
+    if (!state.popup_open) return;
+    const std::wstring output = popup_output_text();
     const UINT32 first = std::min(state.popup_selection_anchor,
                                   state.popup_selection_end);
     const UINT32 last = std::min<UINT32>(
@@ -2311,7 +2430,7 @@ PopupButton popup_button_at(float x, float y) {
     constexpr float top = 50.0f;
     if (y < top || y > top + 25.0f) return PopupButton::none;
     if (x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
-    if (x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
+    if (state.popup_job && x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
     if (x >= panel_right - 43 && x <= panel_right - 10) return PopupButton::close;
     return PopupButton::none;
 }
@@ -2349,7 +2468,7 @@ float popup_animation_progress() {
 }
 
 void draw_command_popup() {
-    if (!state.popup_open || !state.popup_job) return;
+    if (!state.popup_open) return;
     auto& render = state.render;
     constexpr float line_origin = kSearchX + kSearchWidth;
     constexpr float panel_left = kLogicalWidth + 28.0f;
@@ -2393,22 +2512,16 @@ void draw_command_popup() {
     render.d2d_context->SetTransform(
         transform * D2D1::Matrix3x2F::Scale(1.0f, unfold,
                                             D2D1::Point2F(0.0f, panel_top)));
-    std::wstring title = L"> " + state.popup_job->command;
+    std::wstring title = state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
-    const std::wstring status = state.popup_job->running.load()
-        ? L"RUNNING"
-        : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
+    const std::wstring status = state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
     draw_text(status, render.tiny_format.Get(), panel_left + 246, panel_top + 10,
-              panel_left + 315, panel_top + 30,
-              state.popup_job->running.load() ? color(0.62f, 0.91f, 0.70f)
-                                              : state.popup_job->exit_code.load() == 0
-                                                    ? color(0.46f, 0.82f, 0.57f)
-                                                    : color(0.95f, 0.34f, 0.30f));
+              panel_left + 315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
     draw_popup_button(L"COPY", PopupButton::copy,
                       panel_right - 142, panel_right - 92, panel_top + 6);
-    draw_popup_button(L"BG", PopupButton::background,
+    if (state.popup_job) draw_popup_button(L"BG", PopupButton::background,
                       panel_right - 86, panel_right - 49, panel_top + 6);
     draw_popup_button(L"×", PopupButton::close,
                       panel_right - 43, panel_right - 10, panel_top + 6);
@@ -2416,8 +2529,8 @@ void draw_command_popup() {
     render.d2d_context->DrawLine(D2D1::Point2F(panel_left + 10, panel_top + 39),
                                   D2D1::Point2F(panel_right - 10, panel_top + 39),
                                   render.brush.Get(), 1.0f);
-    const std::wstring output = popup_output_text(*state.popup_job);
-    const std::wstring displayed = output.empty() ? L"STARTING COMMAND…" : output;
+    const std::wstring output = popup_output_text();
+    const std::wstring displayed = output.empty() && state.popup_job ? L"STARTING COMMAND…" : output;
     ComPtr<IDWriteTextLayout> output_layout;
     render.write_factory->CreateTextLayout(
         displayed.c_str(), static_cast<UINT32>(displayed.size()),
@@ -2672,6 +2785,18 @@ void cleanup_jobs() {
 }
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (state.popup_open && state.popup_document) {
+        if (message == WM_KEYDOWN) {
+            if (wparam == VK_ESCAPE) close_popup(false, false);
+            else if (wparam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                if (GetKeyState(VK_SHIFT) & 0x8000) copy_job_output(); else copy_popup_selection();
+            } else if (wparam == VK_DOWN || wparam == VK_NEXT) state.popup_document_scroll += wparam == VK_NEXT ? 18 : 1;
+            else if (wparam == VK_UP || wparam == VK_PRIOR) state.popup_document_scroll -= std::min<size_t>(state.popup_document_scroll, wparam == VK_PRIOR ? 18 : 1);
+            state.render_dirty = true;
+            return 0;
+        }
+        if (message == WM_CHAR || message == WM_PASTE || message == WM_CUT || message == WM_CLEAR) return 0;
+    }
     if (state.popup_open && state.popup_job) {
         if (message == WM_KEYDOWN) {
             state.popup_job->interacted = true;
@@ -2679,7 +2804,7 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             if (control) {
                 if (wparam == 'A') {
-                    const std::wstring output = popup_output_text(*state.popup_job);
+                    const std::wstring output = popup_output_text();
                     state.popup_selection_anchor = 0;
                     state.popup_selection_end = static_cast<UINT32>(output.size());
                     state.render_dirty = true;
@@ -2759,7 +2884,14 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
                 if (GetKeyState(VK_SHIFT) & 0x8000) toggle_favorite();
                 else activate_selection();
                 return 0;
-            case VK_TAB: return 0;
+            case VK_TAB: {
+                const auto suggestion = suggested_completion();
+                if (!suggestion.empty()) {
+                    SetWindowTextW(state.edit, suggestion.c_str());
+                    SendMessageW(state.edit, EM_SETSEL, suggestion.size(), suggestion.size());
+                }
+                return 0;
+            }
         }
     }
     if (state.settings_mode && (message == WM_CHAR || message == WM_PASTE ||
@@ -2806,11 +2938,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 else show_launcher();
             }
             return 0;
+        case kUpdateNoticeMessage: {
+            std::unique_ptr<std::wstring> body(reinterpret_cast<std::wstring*>(lparam));
+            show_notification(L"Kalwer update", *body, body->find(L"failed") != std::wstring::npos);
+            return 0;
+        }
         case kToggleMessage:
             if (state.visible) hide_launcher();
             else show_launcher();
             return 0;
         case WM_TIMER:
+            poll_files();
             if (state.icons_deferred) {
                 const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - state.last_input_at).count();
@@ -2842,6 +2980,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         }
         case WM_MOUSEWHEEL:
+            if (state.popup_document) {
+                if (GET_WHEEL_DELTA_WPARAM(wparam) < 0) state.popup_document_scroll += 3;
+                else state.popup_document_scroll -= std::min<size_t>(3, state.popup_document_scroll);
+                state.render_dirty = true; return 0;
+            }
             move_selection(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -1 : 1);
             return 0;
         case WM_MOUSEMOVE: {
@@ -2898,8 +3041,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             const float scale = state.render.scale;
             const float logical_x = GET_X_LPARAM(lparam) / scale;
             const float logical_y = GET_Y_LPARAM(lparam) / scale;
-            if (state.popup_open && state.popup_job) {
-                state.popup_job->interacted = true;
+            if (state.popup_open) {
+                if (state.popup_job) state.popup_job->interacted = true;
                 state.popup_pressed = popup_button_at(logical_x, logical_y);
                 if (state.popup_pressed != PopupButton::none) {
                     SetCapture(window);
@@ -3050,6 +3193,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                      L"Kalwer can still be toggled by launching it again.");
     }
     SetTimer(state.window, kTimerId, 16, nullptr);
+    update_window = state.window;
+    update_status.set("Running Kalwer v" + utf8(kKalwerVersion) + ". Checking for updates…");
+    if (updated_on_launch) announce_update("Update complete. Running Kalwer v" + utf8(kKalwerVersion) + ".");
     std::thread(check_for_update).detach();
 
     MSG message{};

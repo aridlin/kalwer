@@ -20,7 +20,7 @@ comes from the finished launcher below it.
   output copying, and live handoff to Ghostty.
 - Firefox Google search mode and a native precedence-aware calculator.
 - Warm resident process with three-second query and selection restoration.
-- Background GitHub release updates on both Linux and Windows.
+- GitHub release updates on Linux and Windows with visible progress and outcome notifications.
 
 ## Build and run
 
@@ -147,3 +147,88 @@ beside the running executable and atomically applied the next time the resident
 process starts. Both platform updaters require the matching release SHA-256 file
 and validate the executable format before installation; a failed or incomplete
 download leaves the current build intact.
+
+## Indexed file search (Linux and Windows)
+
+Type `:report` to find files or folders, or `:projects invoice` to match multiple
+words anywhere in a path. Exact names rank first, followed by name prefixes,
+name substrings, and path matches. Enter opens the selected path with the system
+default app. A bare `:` lists up to 512 indexed paths. Matching ignores ASCII
+letter case and preserves Unicode names. This searches names and paths, not contents.
+
+The native indexer and SQLite engine are bundled into both executables. The first
+`:` query starts it in the background. It reuses the database immediately, scans
+your home folder (Windows: user profile), then rescans every 60 seconds. New files
+appear in committed batches; deletions are reconciled after each scan. Both
+traversal and queries run off the UI thread. Directory symlinks are not followed.
+Inaccessible directories, `.git`, `.cache`, `node_modules`, `Cache`, `Caches`, the
+recycle bin and Windows system volume metadata are skipped.
+
+To search additional drives or choose narrower roots, create `file-roots.txt` in:
+
+- Linux: `$XDG_CACHE_HOME/kalwer` (normally `~/.cache/kalwer`).
+- Windows: `%LOCALAPPDATA%\Kalwer`.
+
+Use one absolute UTF-8 path per line; lines beginning with `#` are comments.
+This replaces the default home root and is reread every scan. An empty file
+disables indexing. The directory also holds `files-v2.sqlite` and its WAL files.
+Delete these files with Kalwer stopped to rebuild the database from scratch.
+
+One- and two-character queries search filename prefixes. Three or more characters
+enable indexed substring matching anywhere in paths. Queries rank up to 512
+prefix matches and 1,024 substring candidates, returning at most 512 results.
+Broad searches can be partial: database work is capped at 200 ms, and typing a
+new query cancels the previous one. Each database connection uses an 8 MiB page
+cache. SQLite source provenance is recorded in
+[`vendor/sqlite/README.md`](vendor/sqlite/README.md).
+
+Indexer regression checks and a benchmark against an existing database:
+
+```sh
+make vendor/sqlite/sqlite3.o
+g++ -std=c++20 -pthread tests/file_index_test.cpp vendor/sqlite/sqlite3.o -lm -o /tmp/kalwer-index-test
+/tmp/kalwer-index-test
+g++ -O2 -std=c++20 -pthread tests/file_index_benchmark.cpp vendor/sqlite/sqlite3.o -lm -o /tmp/kalwer-index-benchmark
+/tmp/kalwer-index-benchmark ~/.cache/kalwer
+```
+
+## Commands, completion and reusable popups
+
+Type `/` for the command list. `/help` opens scrollable help in the animated
+right-side popup; `/about` opens information. `/files`, `/apps`, `/web`, `/terminal`
+and `/jobs` switch modes. `/reindex` requests a background refresh. `/settings`
+and `/exit` remain available. Up/Down chooses a command; Enter runs it.
+
+Gray inline ghost text previews a matching slash command, application name or
+file-name prefix when the caret is at the end. Tab accepts the suggestion.
+Suggestions do not alter the input until accepted. Linux's existing `>` shell
+completion continues to handle command arguments.
+
+Both hosts expose `open_popup(kalwer::PopupDocument{title, body})` for plain text,
+using the same animated frame and copy/close interactions as terminal output.
+Text popups do not create a shell or background job, do not auto-close, and
+support selection, copying and scrolling. Terminal-specific buttons appear only
+for terminal sessions. The shared `launcher_commands.hpp` catalog generates help.
+Linux retains the `Kalwer Command Output` window title for compatibility with
+existing Hyprland right-side placement rules; the visible header uses the document title.
+
+Android caches installed-app components and labels on disk as well as in memory.
+Cold launches display the saved catalog before PackageManager discovery completes;
+package and locale changes trigger background refreshes. Icon loading uses a
+separate queue. Corrupt or wrong-language snapshots fall back to discovery, and
+failed refreshes preserve a usable cached list.
+
+## Visible update status
+
+Desktop updates notify you when a new release is downloading and when it is
+ready or has failed. `/updates` opens a status popup showing the running version
+and the latest check result, including when your package manager owns updates.
+Linux installs the verified binary on disk and asks you to restart; the next
+launch confirms completion. Windows downloads a verified staging file, asks
+whether to install it on startup, and reports success or failure. Cancelling
+keeps the current version running. Neither platform closes active command
+sessions to force an update.
+
+Checks run once per resident process. Existing installations receive this new
+notification behavior when they first upgrade to v0.4.0. Android installation
+continues to use the system APK installer.

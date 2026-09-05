@@ -1,2 +1,4 @@
 /build-windows/
 /elephant-field
+
+/vendor/sqlite/*.o

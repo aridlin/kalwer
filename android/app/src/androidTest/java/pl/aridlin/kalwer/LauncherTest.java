@@ -118,4 +118,39 @@ public final class LauncherTest extends ActivityInstrumentationTestCase2<MainAct
             assertSame(first, results().getAdapter().getView(1, first, results()));
         });
     }
+
+    public void testPersistentCatalogRoundTripAndLocaleInvalidation() {
+        android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(getActivity().getCacheDir(), "catalog-test.bin"));
+        try {
+            java.util.List<AppCatalog.App> apps = java.util.List.of(new AppCatalog.App(
+                new android.content.ComponentName("example.package", "example.package.Main"), "Łódź 角色"));
+            AppCatalog.writeCache(file, "pl-PL", apps);
+            java.util.List<AppCatalog.App> restored = AppCatalog.readCache(file, "pl-PL");
+            assertNotNull(restored);
+            assertEquals("Łódź 角色", restored.get(0).title);
+            assertEquals(apps.get(0).component, restored.get(0).component);
+            assertNull("Cache restoration must not require PackageManager metadata", restored.get(0).info);
+            assertNull(AppCatalog.readCache(file, "en-US"));
+        } finally { file.delete(); }
+    }
+
+    public void testFailedCatalogWritePreservesPreviousSnapshot() {
+        android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(getActivity().getCacheDir(), "catalog-test.bin"));
+        try {
+            android.content.ComponentName component = new android.content.ComponentName("example.package", "example.package.Main");
+            AppCatalog.writeCache(file, "en-US", java.util.List.of(new AppCatalog.App(component, "Saved")));
+            AppCatalog.writeCache(file, "en-US", java.util.List.of(new AppCatalog.App(component, new String(new char[70000]).replace('\0', 'x'))));
+            assertEquals("Saved", AppCatalog.readCache(file, "en-US").get(0).title);
+        } finally { file.delete(); }
+    }
+
+    public void testTruncatedCatalogFallsBackToDiscovery() throws Exception {
+        android.util.AtomicFile file = new android.util.AtomicFile(new java.io.File(getActivity().getCacheDir(), "catalog-test.bin"));
+        try {
+            java.io.FileOutputStream output = file.startWrite();
+            output.write(new byte[]{0x4b, 0x41, 0x50, 0x31, 0});
+            file.finishWrite(output);
+            assertNull(AppCatalog.readCache(file, "en-US"));
+        } finally { file.delete(); }
+    }
 }
