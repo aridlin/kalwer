@@ -30,11 +30,14 @@ final class HalftoneDrawable extends Drawable {
         if (tile == null) {
             tile = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(tile);
-            int alpha = Color.alpha(color), delta = Math.min(alpha, 255 - alpha);
+            // The requested alpha is the dot opacity, never boosted to 255.
+            // Even opaque panel colors retain a little background visibility.
+            int dotAlpha = Math.min(Color.alpha(color), 242);
+            int gapAlpha = Math.round(dotAlpha * .4f);
             int rgb = color & 0x00ffffff;
-            canvas.drawColor(((alpha - delta) << 24) | rgb);
+            canvas.drawColor((gapAlpha << 24) | rgb);
             Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
-            dot.setColor(((alpha + delta) << 24) | rgb);
+            dot.setColor((dotAlpha << 24) | rgb);
             // SRC preserves the requested alpha instead of compositing it onto the low-alpha base.
             dot.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
             canvas.drawCircle(size * .5f, size * .5f, size * .399f, dot);

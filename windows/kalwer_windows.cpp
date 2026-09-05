@@ -72,7 +72,7 @@ constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.0";
+constexpr wchar_t kKalwerVersion[] = L"0.4.1";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -298,14 +298,10 @@ std::string sha256_hex(const std::vector<std::uint8_t>& bytes) {
 }
 
 kalwer::UpdateStatus update_status;
-std::atomic<HWND> update_window{nullptr};
+kalwer::UpdateBanner update_banner;
 bool updated_on_launch = false;
-constexpr UINT kUpdateNoticeMessage = WM_APP + 44;
-void announce_update(const std::string& message) {
-    update_status.set(message);
-    auto* body = new std::wstring(wide(message));
-    if (!PostMessageW(update_window.load(), kUpdateNoticeMessage, 0, reinterpret_cast<LPARAM>(body))) delete body;
-}
+bool update_failed_on_launch = false;
+void announce_update(const std::string& message) { update_status.set(message); }
 
 void check_for_update() {
     if (running_under_wine()) { update_status.set("Automatic updates are disabled under Wine."); return; }
@@ -314,7 +310,7 @@ void check_for_update() {
     std::filesystem::path pending = target;
     pending += L".update.exe";
     std::error_code error;
-    if (std::filesystem::exists(pending, error)) { announce_update("An update is ready. Restart Kalwer to choose when to install it."); return; }
+    if (std::filesystem::exists(pending, error)) { announce_update("An update is ready. It will install automatically next time Kalwer starts."); return; }
     std::filesystem::path partial = pending;
     partial += L".partial";
     {
@@ -377,7 +373,7 @@ void check_for_update() {
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::filesystem::remove(partial, error);
     } else {
-        attempt.complete("Kalwer v" + utf8(version) + " is downloaded and verified. Restart Kalwer to install it; you can choose Later at startup.");
+        attempt.complete("Kalwer v" + utf8(version) + " is downloaded and verified. It will install automatically next time Kalwer starts.");
     }
 }
 
@@ -429,16 +425,14 @@ bool handle_update_bootstrap() {
             CloseHandle(parent);
         }
         const bool copied = CopyFileW(module.c_str(), target.c_str(), FALSE) != FALSE;
-        if (!copied) MessageBoxW(nullptr, L"Kalwer could not replace the executable. Your previous version will be opened.", L"Kalwer update failed", MB_OK | MB_ICONERROR);
-        if (!launch_process(quote_argument(target.wstring()) + (copied ? L" --updated" : L" --update-failed")))
-            MessageBoxW(nullptr, L"Please start Kalwer manually. The updater could not restart it.", L"Kalwer update", MB_OK | MB_ICONERROR);
+        launch_process(quote_argument(target.wstring()) + (copied ? L" --updated" : L" --update-failed"));
         LocalFree(arguments);
         return true;
     }
 
     std::filesystem::path pending = module;
     pending += L".update.exe";
-    if (count >= 2 && std::wcscmp(arguments[1], L"--update-failed") == 0) { LocalFree(arguments); return false; }
+    if (count >= 2 && std::wcscmp(arguments[1], L"--update-failed") == 0) { update_failed_on_launch = true; LocalFree(arguments); return false; }
     if (count >= 2 && std::wcscmp(arguments[1], L"--updated") == 0) {
         updated_on_launch = true;
         std::thread([pending] {
@@ -454,8 +448,6 @@ bool handle_update_bootstrap() {
     LocalFree(arguments);
     std::error_code error;
     if (!std::filesystem::exists(pending, error)) return false;
-    if (MessageBoxW(nullptr, L"A downloaded Kalwer update is ready. Install it now?\n\nChoose Cancel to keep using this version and install later.",
-                    L"Kalwer update ready", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) return false;
     const std::wstring command = quote_argument(pending.wstring()) +
         L" --apply-update " + std::to_wstring(GetCurrentProcessId()) + L" " +
         quote_argument(module.wstring());
@@ -2608,9 +2600,17 @@ HRESULT render_frame() {
         D2D1::Matrix3x2F::Scale(render.scale, render.scale));
     render.d2d_context->BeginDraw();
     render.d2d_context->Clear(color(0, 0, 0, 0));
+    render.d2d_context->SetTransform(D2D1::Matrix3x2F::Translation(0, static_cast<float>(update_banner.offset())) *
+                                     D2D1::Matrix3x2F::Scale(render.scale, render.scale));
     draw_search();
     draw_results();
     draw_command_popup();
+    render.d2d_context->SetTransform(D2D1::Matrix3x2F::Scale(render.scale, render.scale));
+    if (update_banner.visible()) {
+        fill_round(15, 5, 635, 33, 6, color(0.04f, 0.22f, 0.12f, 0.98f));
+        draw_text(std::wstring(L"Updated to v") + kKalwerVersion, render.title_format.Get(),
+                  29, 9, 620, 31, color(0.68f, 0.94f, 0.76f));
+    }
     HRESULT result = render.d2d_context->EndDraw();
     render.d2d_context->SetTarget(nullptr);
     if (FAILED(result)) return result;
@@ -2644,7 +2644,7 @@ HRESULT render_frame() {
         static_cast<float>(state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
         opening,
-        kResultsY + (state.selection_visual - state.scroll_visual) * kRowPitch,
+        kResultsY + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
         state.results.empty() ? 0 : 1,
         state.closing ? 1 : 0,
         {0.0f, 0.0f},
@@ -2700,6 +2700,7 @@ HRESULT position_and_resize() {
 }
 
 void show_launcher() {
+    update_banner.opened();
     const auto now = std::chrono::steady_clock::now();
     const bool restore = !state.restored_query.empty() &&
         std::chrono::duration_cast<std::chrono::milliseconds>(now - state.hidden_at).count() <=
@@ -2938,11 +2939,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 else show_launcher();
             }
             return 0;
-        case kUpdateNoticeMessage: {
-            std::unique_ptr<std::wstring> body(reinterpret_cast<std::wstring*>(lparam));
-            show_notification(L"Kalwer update", *body, body->find(L"failed") != std::wstring::npos);
-            return 0;
-        }
         case kToggleMessage:
             if (state.visible) hide_launcher();
             else show_launcher();
@@ -2991,7 +2987,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (!state.visible) break;
             const float scale = state.render.scale;
             const float logical_x = GET_X_LPARAM(lparam) / scale;
-            const float logical_y = GET_Y_LPARAM(lparam) / scale;
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
             TrackMouseEvent(&tracking);
             if (state.search_selecting) {
@@ -3040,7 +3036,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         case WM_LBUTTONDOWN: {
             const float scale = state.render.scale;
             const float logical_x = GET_X_LPARAM(lparam) / scale;
-            const float logical_y = GET_Y_LPARAM(lparam) / scale;
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
             if (state.popup_open) {
                 if (state.popup_job) state.popup_job->interacted = true;
                 state.popup_pressed = popup_button_at(logical_x, logical_y);
@@ -3099,7 +3095,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (state.popup_pressed != PopupButton::none) {
                 const float scale = state.render.scale;
                 const float logical_x = GET_X_LPARAM(lparam) / scale;
-                const float logical_y = GET_Y_LPARAM(lparam) / scale;
+                const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
                 const PopupButton pressed = state.popup_pressed;
                 const PopupButton released = popup_button_at(logical_x, logical_y);
                 state.popup_pressed = PopupButton::none;
@@ -3193,9 +3189,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                      L"Kalwer can still be toggled by launching it again.");
     }
     SetTimer(state.window, kTimerId, 16, nullptr);
-    update_window = state.window;
+    update_banner.load(local_data_directory() / L"update-banner", utf8(kKalwerVersion), updated_on_launch);
     update_status.set("Running Kalwer v" + utf8(kKalwerVersion) + ". Checking for updates…");
-    if (updated_on_launch) announce_update("Update complete. Running Kalwer v" + utf8(kKalwerVersion) + ".");
+    if (update_failed_on_launch) update_status.set("The automatic update could not be installed. The previous version is still running.");
     std::thread(check_for_update).detach();
 
     MSG message{};

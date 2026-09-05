@@ -95,7 +95,11 @@ precedence/errors and timer validation. Instrumentation tests exercise installed
 app discovery, favourites, explicit/implicit Google mode, actual Enter-to-browser
 intent encoding, calculator/actions, and the translucent window theme.
 They also check row recycling and the halftone's actual alpha values, including
-that opaque fill remains opaque.
+that both the dots and their gaps remain translucent.
 
 Release builds are deliberately unsigned; configure your own release signing
 before distributing a production release. Keep the signing key outside Git.
+
+Halftone dot opacity follows the background opacity setting instead of being
+boosted to full opacity. Dots are capped at 95% opacity even for opaque panel
+colors; gaps use 40% of the dot alpha. Text and icons retain their own opacity.

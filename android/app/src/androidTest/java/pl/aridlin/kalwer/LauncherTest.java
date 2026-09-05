@@ -93,7 +93,7 @@ public final class LauncherTest extends ActivityInstrumentationTestCase2<MainAct
         finally { attrs.recycle(); }
     }
 
-    public void testHalftoneChangesAlphaAndPreservesOpaqueFill() {
+    public void testHalftoneDotsAndGapsRemainTranslucent() {
         android.graphics.Bitmap image = android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888);
         HalftoneDrawable drawable = new HalftoneDrawable(0xb8000f08, 0, 1, 0);
         drawable.setBounds(0, 0, 32, 32);
@@ -102,11 +102,13 @@ public final class LauncherTest extends ActivityInstrumentationTestCase2<MainAct
         int gap = android.graphics.Color.alpha(image.getPixel(0, 0));
         assertTrue("Halftone must alter alpha, not just colour", dot - gap > 100);
         assertTrue("Gaps reveal the previous app", gap < 150);
+        assertEquals("Dot opacity follows the requested opacity", 184, dot);
+        assertTrue("Dots must also reveal the previous app", dot < 255);
         image.eraseColor(0);
         HalftoneDrawable opaque = new HalftoneDrawable(0xffccffee, 0, 1, 0);
         opaque.setBounds(0, 0, 32, 32); opaque.draw(new android.graphics.Canvas(image));
-        assertEquals(255, android.graphics.Color.alpha(image.getPixel(0, 0)));
-        assertEquals(255, android.graphics.Color.alpha(image.getPixel(4, 4)));
+        assertTrue(android.graphics.Color.alpha(image.getPixel(0, 0)) < 242);
+        assertEquals(242, android.graphics.Color.alpha(image.getPixel(4, 4)));
         image.recycle();
     }
 

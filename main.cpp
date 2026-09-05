@@ -44,7 +44,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.4.0";
+constexpr const char* kKalwerVersion = "0.4.1";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -233,23 +233,8 @@ bool run_capture(gchar* const argv[], std::string& output) {
 
 kalwer::UpdateStatus update_status;
 
-void announce_update(const std::string& message) {
-    update_status.set(message);
-    auto* copy = new std::string(message);
-    g_main_context_invoke(nullptr, +[](gpointer data) -> gboolean {
-        auto* message = static_cast<std::string*>(data);
-        if (state.app && g_application_get_is_registered(G_APPLICATION(state.app))) {
-            GNotification* notice = g_notification_new("Kalwer update");
-            g_notification_set_body(notice, message->c_str());
-            GIcon* icon = g_themed_icon_new("software-update-available");
-            g_notification_set_icon(notice, icon);
-            g_application_send_notification(G_APPLICATION(state.app), "kalwer-update", notice);
-            g_object_unref(icon); g_object_unref(notice);
-        }
-        delete message;
-        return G_SOURCE_REMOVE;
-    }, copy);
-}
+kalwer::UpdateBanner update_banner;
+void announce_update(const std::string& message) { update_status.set(message); }
 
 void check_for_update() {
     gchar* curl = g_find_program_in_path("curl");
@@ -402,13 +387,13 @@ void start_update_check() {
     update_status.set(std::string("Running Kalwer v") + kKalwerVersion + ". Checking for updates…");
     const std::string marker = std::string(g_get_user_state_dir()) + "/kalwer/update-installed";
     gchar* installed = nullptr;
+    bool updated = false;
     if (g_file_get_contents(marker.c_str(), &installed, nullptr, nullptr)) {
-        if (std::string(installed) == kKalwerVersion) {
-            announce_update(std::string("Update complete. Running Kalwer v") + kKalwerVersion + ".");
-            g_unlink(marker.c_str());
-        }
+        updated = std::string(installed) == kKalwerVersion;
+        if (updated) g_unlink(marker.c_str());
         g_free(installed);
     }
+    update_banner.load(std::filesystem::path(g_get_user_state_dir()) / "kalwer/update-banner", kKalwerVersion, updated);
     std::thread(check_for_update).detach();
 }
 
@@ -841,8 +826,17 @@ void repaint_finished_surface() {
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_save(cr);
+    cairo_translate(cr, 0, update_banner.offset());
     draw_search(cr);
     draw_results(cr);
+    cairo_restore(cr);
+    if (update_banner.visible()) {
+        rounded_rectangle(cr, 15, 5, 620, 28, 6);
+        cairo_set_source_rgba(cr, 0.04, 0.22, 0.12, 0.98); cairo_fill(cr);
+        draw_layout(cr, std::string("Updated to v") + kKalwerVersion, 29, 11,
+                    "JetBrainsMono Nerd Font SemiBold 10", 0.68, 0.94, 0.76);
+    }
     cairo_destroy(cr);
     cairo_surface_flush(state.finished_surface);
     state.texture_dirty = true;
@@ -1082,7 +1076,7 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
                 kWindowWidth, kWindowHeight);
     glUniform1f(glGetUniformLocation(state.gl_program, "opening"), progress);
     glUniform1f(glGetUniformLocation(state.gl_program, "selection_y"),
-                static_cast<float>(kResultsY +
+                static_cast<float>(kResultsY + update_banner.offset() +
                     (state.selection_visual - state.scroll_visual) * kRowPitch));
     glUniform1i(glGetUniformLocation(state.gl_program, "has_results"),
                 state.results.empty() ? 0 : 1);
@@ -2831,7 +2825,7 @@ int pointer_result(double x, double y) {
 }
 
 gboolean on_motion(GtkWidget*, GdkEventMotion* event, gpointer) {
-    const int row = pointer_result(event->x, event->y);
+    const int row = pointer_result(event->x, event->y - update_banner.offset());
     if (row >= 0 && row != state.selection) {
         state.selection = row;
         ensure_animation();
@@ -2841,7 +2835,7 @@ gboolean on_motion(GtkWidget*, GdkEventMotion* event, gpointer) {
 
 gboolean on_button(GtkWidget*, GdkEventButton* event, gpointer) {
     if (event->button != GDK_BUTTON_PRIMARY) return FALSE;
-    const int row = pointer_result(event->x, event->y);
+    const int row = pointer_result(event->x, event->y - update_banner.offset());
     if (row < 0) return FALSE;
     state.selection = row;
     activate_selection();
@@ -2895,6 +2889,8 @@ gboolean on_scroll(GtkWidget*, GdkEventScroll* event, gpointer) {
 }
 
 void show_popup() {
+    update_banner.opened();
+    gtk_widget_set_margin_top(state.entry, static_cast<int>(kSearchY) + update_banner.offset());
     clear_completion();
     const gint64 now = g_get_monotonic_time();
     const std::string previous_query = gtk_entry_get_text(GTK_ENTRY(state.entry));

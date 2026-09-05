@@ -20,7 +20,7 @@ comes from the finished launcher below it.
   output copying, and live handoff to Ghostty.
 - Firefox Google search mode and a native precedence-aware calculator.
 - Warm resident process with three-second query and selection restoration.
-- GitHub release updates on Linux and Windows with visible progress and outcome notifications.
+- GitHub release updates on Linux and Windows with a post-update banner.
 
 ## Build and run
 
@@ -218,17 +218,15 @@ package and locale changes trigger background refreshes. Icon loading uses a
 separate queue. Corrupt or wrong-language snapshots fall back to discovery, and
 failed refreshes preserve a usable cached list.
 
-## Visible update status
+## Automatic updates and the update banner
 
-Desktop updates notify you when a new release is downloading and when it is
-ready or has failed. `/updates` opens a status popup showing the running version
-and the latest check result, including when your package manager owns updates.
-Linux installs the verified binary on disk and asks you to restart; the next
-launch confirms completion. Windows downloads a verified staging file, asks
-whether to install it on startup, and reports success or failure. Cancelling
-keeps the current version running. Neither platform closes active command
-sessions to force an update.
+Updates download, verify and install automatically. There is no install-confirmation
+prompt. Once the new version is running, a small `Updated to v…` box appears above
+the search field on the first three launcher openings. The count persists across
+restarts; a fresh installation does not show an update banner.
 
-Checks run once per resident process. Existing installations receive this new
-notification behavior when they first upgrade to v0.4.0. Android installation
-continues to use the system APK installer.
+`/updates` shows the running version and latest update status, including failures
+and package-manager-owned installations. Linux replaces the verified executable
+on disk; Windows stages the verified executable and applies it automatically on
+the next process launch. Active terminal sessions are not forcibly restarted.
+Checks run once per resident process. Android uses the system APK installer.
