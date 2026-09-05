@@ -104,6 +104,14 @@ windowrule = no_shadow on, match:class elephant-field
 
 Kalwer is released under the MIT License.
 
+## Android preview
+
+The native [Android port](android/README.md) opens as a fullscreen translucent
+launcher, ready for a side-button **Open app** binding. It searches installed apps,
+keeps favourites, calculates locally, and defaults to Google on Enter when no
+local results match. `>` provides phone actions in place of the desktop PTY.
+Build the installable APK with `cd android && ./gradlew :app:assembleDebug`.
+
 ## Windows prototype
 
 The native Windows target lives in `windows/`. It uses Win32 for its resident

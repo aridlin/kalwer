@@ -1,0 +1,4 @@
+<resources>
+    <item name="search_query" type="id" />
+    <item name="search_results" type="id" />
+</resources>
