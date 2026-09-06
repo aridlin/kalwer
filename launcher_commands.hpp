@@ -30,7 +30,7 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
 inline PopupDocument help() {
     PopupDocument result{"KALWER HELP", "SEARCH MODES\nText: apps    :text: files\n> command: shell    ? text: web\n< : background jobs\n\nCOMMANDS\n"};
     for (const auto& command : commands) result.body += std::string(command.name) + "  " + std::string(command.description) + "\n";
-    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nShift+Enter: favorite app\n\nFiles: 1–2 characters match name prefixes;\n3+ match anywhere in paths.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
+    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: favorite app\n\nFiles: 1–2 characters match name prefixes;\n3+ match anywhere in paths.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
     return result;
 }
 inline PopupDocument about() { return {"ABOUT KALWER", "Kalwer\nResident application and file launcher.\n\nLinux and Windows share commands and\na bundled SQLite file index.\n\nType /help for commands and shortcuts.\n"}; }

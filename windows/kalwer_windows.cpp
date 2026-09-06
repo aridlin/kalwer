@@ -72,7 +72,7 @@ constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.1";
+constexpr wchar_t kKalwerVersion[] = L"0.4.2";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -300,6 +300,7 @@ std::string sha256_hex(const std::vector<std::uint8_t>& bytes) {
 kalwer::UpdateStatus update_status;
 kalwer::UpdateBanner update_banner;
 bool updated_on_launch = false;
+std::wstring elevated_command;
 bool update_failed_on_launch = false;
 void announce_update(const std::string& message) { update_status.set(message); }
 
@@ -1596,7 +1597,26 @@ void add_background_results(std::vector<AppEntry>& output, const std::wstring& f
     }
 }
 
-bool launch_application(const AppEntry& result) {
+bool launch_application(const AppEntry& result, bool elevated = false) {
+    if (elevated) {
+        SHELLEXECUTEINFOW execution{};
+        execution.cbSize = sizeof(execution);
+        execution.hwnd = state.window;
+        execution.lpVerb = L"runas";
+        execution.lpFile = result.link.c_str();
+        execution.nShow = SW_SHOWNORMAL;
+        PIDLIST_ABSOLUTE item = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(result.link.c_str(), nullptr, &item, 0, nullptr)) && item) {
+            execution.fMask = SEE_MASK_IDLIST | SEE_MASK_INVOKEIDLIST;
+            execution.lpIDList = item;
+        }
+        const bool launched = ShellExecuteExW(&execution) != FALSE;
+        const DWORD error = GetLastError();
+        if (item) CoTaskMemFree(item);
+        if (launched) return true;
+        open_popup({"RUN AS ADMINISTRATOR", "Elevation was cancelled or this app does not support administrator activation. Error " + std::to_string(error)});
+        return false;
+    }
     if (!result.app_user_model_id.empty()) {
         ComPtr<IApplicationActivationManager> activation;
         if (SUCCEEDED(CoCreateInstance(CLSID_ApplicationActivationManager, nullptr,
@@ -1624,7 +1644,7 @@ bool launch_application(const AppEntry& result) {
                                                     nullptr, nullptr, SW_SHOWNORMAL)) > 32;
 }
 
-void activate_selection() {
+void activate_selection(bool elevated = false) {
     if (state.results.empty() || window_text(state.edit).substr(0, 1) == L":") return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
     if (result.link == L"::slash") {
@@ -1667,7 +1687,17 @@ void activate_selection() {
                                  url_encode(result.subtitle);
         ShellExecuteW(state.window, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     } else if (result.link == L"::command") {
-        start_command_popup(result.payload.empty() ? result.subtitle : result.payload);
+        const auto command = result.payload.empty() ? result.subtitle : result.payload;
+        if (elevated) {
+            const auto module = executable_path();
+            const auto parameters = L"--admin-command " + quote_argument(command);
+            SHELLEXECUTEINFOW execution{};
+            execution.cbSize = sizeof(execution); execution.hwnd = state.window;
+            execution.lpVerb = L"runas"; execution.lpFile = module.c_str();
+            execution.lpParameters = parameters.c_str(); execution.nShow = SW_SHOWNORMAL;
+            if (ShellExecuteExW(&execution)) hide_launcher();
+            else open_popup({"RUN AS ADMINISTRATOR", "Elevation was cancelled or the command could not be started. Error " + std::to_string(GetLastError())});
+        } else start_command_popup(command);
         return;
     } else if (result.link == L"::background") {
         try {
@@ -1676,7 +1706,7 @@ void activate_selection() {
         }
         return;
     } else {
-        launch_application(result);
+        if (!launch_application(result, elevated)) return;
     }
     hide_launcher();
 }
@@ -2422,7 +2452,7 @@ PopupButton popup_button_at(float x, float y) {
     constexpr float top = 50.0f;
     if (y < top || y > top + 25.0f) return PopupButton::none;
     if (x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
-    if (state.popup_job && x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
+    if (elevated_command.empty() && state.popup_job && x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
     if (x >= panel_right - 43 && x <= panel_right - 10) return PopupButton::close;
     return PopupButton::none;
 }
@@ -2513,7 +2543,7 @@ void draw_command_popup() {
               panel_left + 315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
     draw_popup_button(L"COPY", PopupButton::copy,
                       panel_right - 142, panel_right - 92, panel_top + 6);
-    if (state.popup_job) draw_popup_button(L"BG", PopupButton::background,
+    if (elevated_command.empty() && state.popup_job) draw_popup_button(L"BG", PopupButton::background,
                       panel_right - 86, panel_right - 49, panel_top + 6);
     draw_popup_button(L"×", PopupButton::close,
                       panel_right - 43, panel_right - 10, panel_top + 6);
@@ -2740,6 +2770,7 @@ void show_launcher() {
 }
 
 void finish_hide_launcher() {
+    if (!elevated_command.empty()) { DestroyWindow(state.window); return; }
     ShowWindow(state.window, SW_HIDE);
     state.visible = false;
     state.closing = false;
@@ -2883,7 +2914,7 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             case VK_ESCAPE: hide_launcher(); return 0;
             case VK_RETURN:
                 if (GetKeyState(VK_SHIFT) & 0x8000) toggle_favorite();
-                else activate_selection();
+                else activate_selection((GetKeyState(VK_CONTROL) & 0x8000) != 0);
                 return 0;
             case VK_TAB: {
                 const auto suggestion = suggested_completion();
@@ -3138,10 +3169,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    if (handle_update_bootstrap()) return 0;
+    int argument_count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
+    if (arguments && argument_count == 3 && std::wcscmp(arguments[1], L"--admin-command") == 0)
+        elevated_command = arguments[2];
+    if (arguments) LocalFree(arguments);
+    if (elevated_command.empty() && handle_update_bootstrap()) return 0;
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 1;
     state.instance = instance;
-    state.mutex = CreateMutexW(nullptr, FALSE, L"Local\\KalwerWindowsResident-v1");
+    if (elevated_command.empty()) state.mutex = CreateMutexW(nullptr, FALSE, L"Local\\KalwerWindowsResident-v1");
     if (state.mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
             PostMessageW(existing, kToggleMessage, 0, 0);
@@ -3180,6 +3216,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
     load_favorites();
     load_settings();
+    if (!elevated_command.empty()) {
+        SetTimer(state.window, kTimerId, 16, nullptr);
+        show_launcher();
+        SetWindowTextW(state.edit, (L"ADMIN > " + elevated_command).c_str());
+        start_command_popup(elevated_command);
+        state.suppress_popup_launch_char = false;
+        if (!state.popup_job) {
+            fail_message(L"Could not create the elevated terminal.");
+            DestroyWindow(state.window);
+        }
+    } else {
     load_apps();
     update_results();
     state.hotkey_registered = RegisterHotKey(state.window, kHotkeyId,
@@ -3193,6 +3240,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     update_status.set("Running Kalwer v" + utf8(kKalwerVersion) + ". Checking for updates…");
     if (update_failed_on_launch) update_status.set("The automatic update could not be installed. The previous version is still running.");
     std::thread(check_for_update).detach();
+    }
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

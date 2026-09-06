@@ -2,6 +2,7 @@
 #include "launcher_commands.hpp"
 #include "update_status.hpp"
 #include <gtk/gtk.h>
+#include "elevation_linux.hpp"
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <pango/pangocairo.h>
@@ -44,7 +45,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.4.1";
+constexpr const char* kKalwerVersion = "0.4.2";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2395,7 +2396,13 @@ void show_settings_window() {
     gtk_window_present(GTK_WINDOW(state.settings_window));
 }
 
-void activate_selection() {
+void launch_app_with_sudo(const Result& result) {
+    const auto command = kalwer::desktop_command(result.identifier);
+    if (command.empty()) open_popup({"SUDO", "Could not resolve an executable command for this desktop entry."});
+    else start_command_popup(kalwer::sudo_command(command));
+}
+
+void activate_selection(bool elevated = false) {
     if (state.selection < 0 || state.selection >= static_cast<int>(state.results.size())) return;
     const Result result = state.results[state.selection];
     if (result.provider == "kalwer-slash") {
@@ -2436,7 +2443,7 @@ void activate_selection() {
         return;
     }
     if (result.provider == "kalwer-command") {
-        start_command_popup(trim_copy(result.identifier));
+        start_command_popup(elevated ? kalwer::sudo_command(trim_copy(result.identifier)) : trim_copy(result.identifier));
         return;
     }
     if (result.provider == "kalwer-google") {
@@ -2455,6 +2462,7 @@ void activate_selection() {
         hide_kalwer();
         return;
     }
+    if (elevated) { launch_app_with_sudo(result); return; }
     const std::string query = clean_field(gtk_entry_get_text(GTK_ENTRY(state.entry)));
     const std::string request = clean_field(result.provider) + ";" +
                                 clean_field(result.identifier) + ";" +
@@ -2733,7 +2741,7 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
         case GDK_KEY_Return:
         case GDK_KEY_KP_Enter:
             if (event->state & GDK_SHIFT_MASK) toggle_favorite();
-            else activate_selection();
+            else activate_selection((event->state & GDK_CONTROL_MASK) != 0);
             return TRUE;
         case GDK_KEY_p:
         case GDK_KEY_P:
