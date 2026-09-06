@@ -72,7 +72,7 @@ constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.2";
+constexpr wchar_t kKalwerVersion[] = L"0.4.3";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -324,7 +324,7 @@ void check_for_update() {
     if (!http_get(kLatestReleaseUrl, nullptr, &effective)) { announce_update("Could not check GitHub for updates. Your current version is unchanged."); return; }
     const std::wstring marker = L"/tag/v";
     const std::size_t marker_at = effective.rfind(marker);
-    if (marker_at == std::wstring::npos) return;
+    if (marker_at == std::wstring::npos) { update_status.set("GitHub returned an unrecognized release URL. Run /updates to retry."); return; }
     const std::wstring version = effective.substr(marker_at + marker.size());
     if (!version_is_newer(version, kKalwerVersion)) { update_status.set("Kalwer v" + utf8(kKalwerVersion) + " is up to date."); return; }
 
@@ -376,6 +376,15 @@ void check_for_update() {
     } else {
         attempt.complete("Kalwer v" + utf8(version) + " is downloaded and verified. It will install automatically next time Kalwer starts.");
     }
+}
+
+void request_update_check() {
+    if (!update_status.begin_check()) return;
+    std::thread([] {
+        try { check_for_update(); }
+        catch (...) { update_status.set("The update check failed. Run /updates to retry."); }
+        update_status.end_check();
+    }).detach();
 }
 
 std::wstring quote_argument(const std::wstring& value) {
@@ -1650,7 +1659,7 @@ void activate_selection(bool elevated = false) {
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
         if (name == "/help") open_popup(kalwer::help());
-        else if (name == "/updates") open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()});
+        else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/exit") DestroyWindow(state.window);
         else if (name == "/settings") {
@@ -2975,6 +2984,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             else show_launcher();
             return 0;
         case WM_TIMER:
+            if (wparam == kTimerId + 1) { request_update_check(); return 0; }
+            if (state.popup_document && state.popup_document->title == "KALWER UPDATES") {
+                const auto body = "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get();
+                if (state.popup_document->body != body) { state.popup_document->body = body; state.render_dirty = true; }
+            }
             poll_files();
             if (state.icons_deferred) {
                 const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3239,7 +3253,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     update_banner.load(local_data_directory() / L"update-banner", utf8(kKalwerVersion), updated_on_launch);
     update_status.set("Running Kalwer v" + utf8(kKalwerVersion) + ". Checking for updates…");
     if (update_failed_on_launch) update_status.set("The automatic update could not be installed. The previous version is still running.");
-    std::thread(check_for_update).detach();
+    request_update_check();
+    SetTimer(state.window, kTimerId + 1, 3600000, nullptr);
     }
 
     MSG message{};

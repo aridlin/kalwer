@@ -7,7 +7,14 @@ namespace kalwer {
 class UpdateStatus {
     mutable std::mutex mutex_;
     std::string message_;
+    bool checking_ = false;
 public:
+    bool begin_check() {
+        std::lock_guard lock(mutex_);
+        if (checking_) return false;
+        checking_ = true; message_ = "Checking GitHub for updates…"; return true;
+    }
+    void end_check() { std::lock_guard lock(mutex_); checking_ = false; }
     void set(std::string message) { std::lock_guard lock(mutex_); message_ = std::move(message); }
     std::string get() const { std::lock_guard lock(mutex_); return message_; }
 };

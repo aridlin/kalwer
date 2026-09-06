@@ -45,7 +45,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.4.2";
+constexpr const char* kKalwerVersion = "0.4.3";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -123,6 +123,7 @@ struct State {
     GtkWidget* output_content = nullptr;
     GtkWidget* output_terminal = nullptr;
     GtkWidget* output_text = nullptr;
+    bool output_updates = false;
     GtkWidget* output_status = nullptr;
     guint output_animation_source = 0;
     guint output_close_source = 0;
@@ -238,6 +239,15 @@ kalwer::UpdateBanner update_banner;
 void announce_update(const std::string& message) { update_status.set(message); }
 
 void check_for_update() {
+    gchar* installed = nullptr;
+    const std::string marker_path = std::string(g_get_user_state_dir()) + "/kalwer/update-installed";
+    if (g_file_get_contents(marker_path.c_str(), &installed, nullptr, nullptr)) {
+        const std::string version = installed; g_free(installed);
+        if (version_is_newer(version, kKalwerVersion)) {
+            update_status.set("Kalwer v" + version + " is installed on disk. Exit and reopen Kalwer to use it.");
+            return;
+        }
+    }
     gchar* curl = g_find_program_in_path("curl");
     if (!curl) { update_status.set("Automatic updates unavailable: curl is missing."); return; }
     GError* path_error = nullptr;
@@ -285,6 +295,7 @@ void check_for_update() {
     const std::string marker = "/tag/v";
     const std::size_t marker_at = effective_url.rfind(marker);
     if (marker_at == std::string::npos) {
+        update_status.set("GitHub returned an unrecognized release URL. Run /updates to retry.");
         g_free(curl);
         return;
     }
@@ -384,6 +395,15 @@ void check_for_update() {
     g_free(curl);
 }
 
+void request_update_check() {
+    if (!update_status.begin_check()) return;
+    std::thread([] {
+        try { check_for_update(); }
+        catch (...) { update_status.set("The update check failed. Run /updates to retry."); }
+        update_status.end_check();
+    }).detach();
+}
+
 void start_update_check() {
     update_status.set(std::string("Running Kalwer v") + kKalwerVersion + ". Checking for updates…");
     const std::string marker = std::string(g_get_user_state_dir()) + "/kalwer/update-installed";
@@ -395,7 +415,7 @@ void start_update_check() {
         g_free(installed);
     }
     update_banner.load(std::filesystem::path(g_get_user_state_dir()) / "kalwer/update-banner", kKalwerVersion, updated);
-    std::thread(check_for_update).detach();
+    request_update_check();
 }
 
 std::string ascii_lower(std::string value) {
@@ -1662,6 +1682,7 @@ void output_destroyed(GtkWidget*, gpointer) {
     state.output_content = nullptr;
     state.output_terminal = nullptr;
     state.output_text = nullptr;
+    state.output_updates = false;
     state.output_status = nullptr;
     state.output_session.clear();
     state.output_command.clear();
@@ -2408,7 +2429,7 @@ void activate_selection(bool elevated = false) {
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
         if (name == "/help") open_popup(kalwer::help());
-        else if (name == "/updates") open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()});
+        else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/settings") show_settings_window();
         else if (name == "/exit") g_application_quit(G_APPLICATION(state.app));
@@ -2940,6 +2961,18 @@ void activate(GtkApplication* app, gpointer) {
     state.app = app;
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
+    g_timeout_add_seconds(3600, +[](gpointer) -> gboolean { request_update_check(); return G_SOURCE_CONTINUE; }, nullptr);
+    g_timeout_add(150, +[](gpointer) -> gboolean {
+        if (state.output_updates && state.output_text) {
+            GtkTextBuffer* buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.output_text));
+            GtkTextIter start, end; gtk_text_buffer_get_bounds(buffer, &start, &end);
+            gchar* previous = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+            const std::string body = std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get();
+            if (body != previous) gtk_text_buffer_set_text(buffer, body.c_str(), -1);
+            g_free(previous);
+        }
+        return G_SOURCE_CONTINUE;
+    }, nullptr);
     state.window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(state.window), "Kalwer");
     gtk_window_set_icon_name(GTK_WINDOW(state.window), "kalwer");

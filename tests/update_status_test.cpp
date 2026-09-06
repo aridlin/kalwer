@@ -13,6 +13,12 @@ int main() {
     assert(notices.size() == 1 && notices[0] == "Ready; restart to install");
     kalwer::UpdateStatus status;
     status.set(notices[0]); assert(status.get() == notices[0]);
+    assert(status.begin_check());
+    assert(!status.begin_check()); // Reopening /updates cannot start another download.
+    status.set("Up to date at startup"); status.end_check();
+    assert(status.begin_check()); // A later manual/periodic check replaces stale status.
+    assert(status.get().find("Checking GitHub") == 0);
+    status.end_check();
     const auto file = std::filesystem::temp_directory_path() / ("kalwer-banner-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     kalwer::UpdateBanner first;
     first.load(file, "1.0", false); first.opened(); assert(!first.visible());

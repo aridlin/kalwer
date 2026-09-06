@@ -236,3 +236,5 @@ Checks run once per resident process. Android uses the system APK installer.
 Press **Ctrl+Enter** on an app or `> command`. Linux runs it through `sudo` in the PTY popup, including the password prompt; shell pipelines and redirections run inside the elevated shell. GUI apps remain subject to their own root and display-session restrictions. Windows uses the standard UAC prompt: apps use Run as administrator, and commands open a dedicated elevated Kalwer PTY window with the same right-side animation. Closing that window ends its elevated session; backgrounding is unavailable there. Packaged Windows apps that cannot run elevated show an explanation. Normal Enter keeps its usual behavior.
 
 This release is delivered by the automatic updater, with the existing three-opening update banner.
+
+`/updates` performs a fresh background check and updates its popup live. Resident desktop launchers also recheck hourly. Concurrent requests share the active check, preventing duplicate downloads.
