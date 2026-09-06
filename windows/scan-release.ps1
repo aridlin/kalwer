@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ReleaseTag,
-    [string]$Repository = 'aridlin/kalwer'
+    [string]$Repository = 'aridlin/kalwer',
+    [switch]$RequireRealtime
 )
 $ErrorActionPreference = 'Stop'
 if ($ReleaseTag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected a desktop release tag such as v0.5.1' }
@@ -30,8 +31,20 @@ for ($attempt = 0; $attempt -lt 3; $attempt++) {
     if ($attempt -lt 2) { Start-Sleep -Seconds 10 }
 }
 if (-not $updated) { throw 'Defender intelligence update failed; scan results are unavailable.' }
+if ($RequireRealtime) {
+    # Opt-in for disposable CI runners; only enable protection, never disable it.
+    Set-MpPreference -DisableRealtimeMonitoring $false
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
+        Start-Sleep -Seconds 5
+    }
+    if (-not (Get-MpComputerStatus).RealTimeProtectionEnabled) {
+        throw 'Real-time protection could not be enabled; download check is unavailable.'
+    }
+}
 Get-MpComputerStatus | Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion,
     AntivirusSignatureLastUpdated, AMRunningMode, RealTimeProtectionEnabled | Format-List
+Get-MpPreference | Select-Object MAPSReporting, SubmitSamplesConsent, DisableBlockAtFirstSeen | Format-List
 
 $baseUrl = "https://github.com/$Repository/releases/download/$ReleaseTag"
 $sample = Join-Path $sampleDirectory 'kalwer.exe'
@@ -51,5 +64,8 @@ $scanExit = $LASTEXITCODE
 if ($scanExit -ne 0) { throw "Defender detected a threat or could not scan (exit $scanExit). See output above." }
 if (-not (Test-Path $sample) -or (Get-FileHash $sample -Algorithm SHA256).Hash.ToLowerInvariant() -ne $actual) {
     throw 'Sample was removed or modified during scanning; not a clean result.'
+}
+if ($RequireRealtime -and -not (Get-MpComputerStatus).RealTimeProtectionEnabled) {
+    throw 'Real-time protection became unavailable during the check.'
 }
 Write-Output 'On-demand scan passed. This does not certify SmartScreen, cloud reputation, or runtime behavior.'

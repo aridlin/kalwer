@@ -23,4 +23,4 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ matrix.release }}
-        run: ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG
+        run: ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG -RequireRealtime
