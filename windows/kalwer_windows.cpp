@@ -71,8 +71,10 @@ constexpr UINT kHotkeyId = 1;
 constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
+constexpr UINT kCloseAdminPopupMessage = WM_APP + 43;
+constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.3";
+constexpr wchar_t kKalwerVersion[] = L"0.4.4";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2972,15 +2974,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         case WM_HOTKEY:
             if (wparam == kHotkeyId) {
-                if (state.popup_open) {
-                    ShowWindow(state.window, SW_SHOWNORMAL);
-                    SetForegroundWindow(state.window);
-                } else if (state.visible) hide_launcher();
+                if (HWND admin = FindWindowW(kWindowClass, kAdminWindowTitle)) {
+                    PostMessageW(admin, kCloseAdminPopupMessage, 0, 0);
+                    return 0;
+                }
+                if (state.popup_open) close_popup(false, true);
+                else if (state.visible) hide_launcher();
                 else show_launcher();
             }
             return 0;
+        case kCloseAdminPopupMessage:
+            if (!elevated_command.empty() && state.popup_open) close_popup(false, true);
+            return 0;
         case kToggleMessage:
-            if (state.visible) hide_launcher();
+            if (state.popup_open) close_popup(false, true);
+            else if (state.visible) hide_launcher();
             else show_launcher();
             return 0;
         case WM_TIMER:
@@ -3079,6 +3087,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             return 0;
         case WM_LBUTTONDOWN: {
+            SetFocus(state.edit);
             const float scale = state.render.scale;
             const float logical_x = GET_X_LPARAM(lparam) / scale;
             const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
@@ -3155,7 +3164,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             return 0;
         }
+        case WM_SETFOCUS:
+            SetFocus(state.edit);
+            return 0;
+        case WM_KEYDOWN:
+            // Escape still closes if Windows temporarily focuses the parent.
+            if (wparam == VK_ESCAPE) {
+                if (state.popup_open) close_popup(false, true);
+                else hide_launcher();
+                return 0;
+            }
+            break;
         case WM_ACTIVATE:
+            if (LOWORD(wparam) != WA_INACTIVE) SetFocus(state.edit);
             if (LOWORD(wparam) == WA_INACTIVE && state.visible && !state.popup_open &&
                 !running_under_wine()) {
                 hide_launcher();
@@ -3193,7 +3214,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     state.instance = instance;
     if (elevated_command.empty()) state.mutex = CreateMutexW(nullptr, FALSE, L"Local\\KalwerWindowsResident-v1");
     if (state.mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
+        if (HWND existing = FindWindowW(kWindowClass, kWindowTitle)) {
             PostMessageW(existing, kToggleMessage, 0, 0);
         }
         CloseHandle(state.mutex);
@@ -3214,9 +3235,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     if (!RegisterClassExW(&window_class)) return 1;
 
     state.window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
-        kWindowClass, kWindowTitle, WS_POPUP, 0, 0, kLogicalWidth, kLogicalHeight,
+        kWindowClass, elevated_command.empty() ? kWindowTitle : kAdminWindowTitle, WS_POPUP, 0, 0, kLogicalWidth, kLogicalHeight,
         nullptr, nullptr, instance, nullptr);
     if (!state.window) return 1;
+    if (!elevated_command.empty()) {
+        // The unelevated resident may request closure only, never input or execution.
+        ChangeWindowMessageFilterEx(state.window, kCloseAdminPopupMessage, MSGFLT_ALLOW, nullptr);
+    }
     const int corner_preference = 1;
     DwmSetWindowAttribute(state.window, 33, &corner_preference, sizeof(corner_preference));
 

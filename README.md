@@ -238,3 +238,5 @@ Press **Ctrl+Enter** on an app or `> command`. Linux runs it through `sudo` in t
 This release is delivered by the automatic updater, with the existing three-opening update banner.
 
 `/updates` performs a fresh background check and updates its popup live. Resident desktop launchers also recheck hourly. Concurrent requests share the active check, preventing duplicate downloads.
+
+On Windows, Alt+Space closes an open popup even while another app has focus (same action as its × button, stopping an active command). Clicking Kalwer restores keyboard input so Escape works again.
