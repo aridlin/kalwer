@@ -13,7 +13,23 @@ $status = Get-MpComputerStatus
 if (-not $status.AMServiceEnabled -or -not $status.AntivirusEnabled) {
     throw 'Defender is unavailable on this runner; this is NOT a clean scan.'
 }
-Update-MpSignature
+function Get-ScannerPath {
+    $platformRoot = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
+    $path = Get-ChildItem "$platformRoot\*\MpCmdRun.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $path) { $path = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe' }
+    if (-not (Test-Path $path)) { throw 'Defender command-line scanner not found' }
+    return $path
+}
+# Fresh hosted images can restart the Defender service while updating its engine.
+# Use the supported CLI with bounded retries; never silently use stale signatures.
+$updated = $false
+for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    & (Get-ScannerPath) -SignatureUpdate -MMPC
+    if ($LASTEXITCODE -eq 0) { $updated = $true; break }
+    if ($attempt -lt 2) { Start-Sleep -Seconds 10 }
+}
+if (-not $updated) { throw 'Defender intelligence update failed; scan results are unavailable.' }
 Get-MpComputerStatus | Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion,
     AntivirusSignatureLastUpdated, AMRunningMode, RealTimeProtectionEnabled | Format-List
 
@@ -27,11 +43,7 @@ if ($expected -notmatch '^[a-f0-9]{64}$' -or $expected -ne $actual) { throw 'Rel
 Write-Output "Release: $ReleaseTag`nSHA256: $actual"
 Get-AuthenticodeSignature $sample | Select-Object Status, StatusMessage | Format-List
 
-$platformRoot = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
-$scanner = Get-ChildItem "$platformRoot\*\MpCmdRun.exe" -ErrorAction SilentlyContinue |
-    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-if (-not $scanner) { $scanner = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe' }
-if (-not (Test-Path $scanner)) { throw 'Defender command-line scanner not found' }
+$scanner = Get-ScannerPath
 # This per-scan option ignores exclusions and reports detections without modifying
 # the sample. It does not disable antivirus or change system protection settings.
 & $scanner -Scan -ScanType 3 -File $sample -DisableRemediation
