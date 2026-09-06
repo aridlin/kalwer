@@ -14,6 +14,8 @@ inline constexpr std::array commands = {
     Command{"/web", "Search the web", "? "},
     Command{"/terminal", "Run a shell command", "> "},
     Command{"/jobs", "Show background commands", "<"},
+    Command{"/index", "System-wide file index status", ""},
+    Command{"/index-setup", "Set up the system file indexer", ""},
     Command{"/reindex", "Refresh the file index now", ""},
     Command{"/updates", "Update status and running version", ""},
     Command{"/about", "About Kalwer", ""},
@@ -30,8 +32,8 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
 inline PopupDocument help() {
     PopupDocument result{"KALWER HELP", "SEARCH MODES\nText: apps    :text: files\n> command: shell    ? text: web\n< : background jobs\n\nCOMMANDS\n"};
     for (const auto& command : commands) result.body += std::string(command.name) + "  " + std::string(command.description) + "\n";
-    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: favorite app\n\nFiles: 1–2 characters match name prefixes;\n3+ match anywhere in paths.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
+    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: favorite app\n\nFiles: system-wide names and paths.\nWindows: Everything; Linux: plocate.\n/index: status    /index-setup: setup.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
     return result;
 }
-inline PopupDocument about() { return {"ABOUT KALWER", "Kalwer\nResident application and file launcher.\n\nLinux and Windows share commands and\na bundled SQLite file index.\n\nType /help for commands and shortcuts.\n"}; }
+inline PopupDocument about() { return {"ABOUT KALWER", "Kalwer\nResident application and file launcher.\n\nLinux and Windows share commands and\nnative system-wide file indexes.\n\nType /help for commands and shortcuts.\n"}; }
 }

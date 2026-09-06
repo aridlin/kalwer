@@ -1,4 +1,4 @@
-#include "file_index.hpp"
+#include "system_file_index.hpp"
 #include "launcher_commands.hpp"
 #include "update_status.hpp"
 #include <gtk/gtk.h>
@@ -46,7 +46,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.4.5";
+constexpr const char* kKalwerVersion = "0.5.0";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2485,12 +2485,26 @@ void activate_selection(bool elevated = false) {
         const auto& name = result.identifier;
         if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
+        else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nplocate indexes readable local filesystems, including home and mounted local drives. Virtual filesystems and network filesystems are excluded.\n\n/index-setup: install plocate if needed\n/reindex: refresh the incremental index\n\nUpdates run every 15 minutes while Kalwer is running."});
+        else if (name == "/index-setup") {
+            gchar* program = g_find_program_in_path("plocate");
+            if (program) { g_free(program); file_index.refresh(); open_popup({"SYSTEM FILE SEARCH", "plocate is installed. A system-wide incremental refresh has started. Use :query while it builds."}); }
+            else {
+                std::string command;
+                for (const auto& package : std::vector<std::pair<std::string,std::string>>{{"pacman","sudo pacman -S --needed plocate"},{"apt-get","sudo apt-get install plocate"},{"dnf","sudo dnf install plocate"},{"zypper","sudo zypper install plocate"}}) {
+                    program = g_find_program_in_path(package.first.c_str());
+                    if (program) { g_free(program); command = package.second; break; }
+                }
+                if (command.empty()) open_popup({"SYSTEM FILE SEARCH", "Install plocate with your distribution's package manager, then run /reindex."});
+                else start_command_popup(command + " && printf '\nInstalled. Run /reindex in Kalwer to build the system-wide index.\n'");
+            }
+        }
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/settings") show_settings_window();
         else if (name == "/exit") g_application_quit(G_APPLICATION(state.app));
         else if (name == "/reindex") {
             file_index.refresh();
-            open_popup({"FILE INDEX", "A file index refresh was requested.\n\nUse :query to search while it runs.\nNew files appear as batches are saved.\n"});
+            open_popup({"FILE INDEX", "A system-wide plocate refresh was requested.\n\nUse :query while it runs. New results become available when the updated database is ready.\n"});
         } else for (const auto& c : kalwer::commands) if (c.name == name) {
             gtk_entry_set_text(GTK_ENTRY(state.entry), std::string(c.replacement).c_str());
             gtk_editable_set_position(GTK_EDITABLE(state.entry), -1);
@@ -3017,7 +3031,7 @@ void activate(GtkApplication* app, gpointer) {
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
-        if (!update_ready || update_restart_path.empty() || state.output_window ||
+        if (!update_ready || update_restart_path.empty() || state.output_window || file_index.busy() ||
             (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
         for (const auto& job : state.jobs) {
             int status = 0;

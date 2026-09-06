@@ -13,6 +13,7 @@ comes from the finished launcher below it.
 
 ## Features
 
+- System-wide `:` file search through Everything on Windows and plocate on Linux.
 - GPU-backed, animated halftone coverage over the fully rendered interface.
 - Scrollable Elephant application search with persistent, unlimited favourites
   grouped above normally ranked results.
@@ -148,48 +149,21 @@ the launcher is hidden; Kalwer relaunches itself. Both platform updaters require
 and validate the executable format before installation; a failed or incomplete
 download leaves the current build intact.
 
-## Indexed file search (Linux and Windows)
+## System-wide file search (Linux and Windows)
 
-Type `:report` to find files or folders, or `:projects invoice` to match multiple
-words anywhere in a path. Exact names rank first, followed by name prefixes,
-name substrings, and path matches. Enter opens the selected path with the system
-default app. A bare `:` lists up to 512 indexed paths. Matching ignores ASCII
-letter case and preserves Unicode names. This searches names and paths, not contents.
+Type `:report` or `:projects invoice` to search files and folders across the system. Enter opens the selected result. Names and paths are searched, not file contents. Results prefer exact filenames, then name prefixes/substrings, then path matches. Up to 512 results are shown; narrow broad searches to find a specific file. A bare `:` shows index status. `/index` explains the active backend and `/reindex` requests a refresh.
 
-The native indexer and SQLite engine are bundled into both executables. The first
-`:` query starts it in the background. It reuses the database immediately, scans
-your home folder (Windows: user profile), then rescans every 60 seconds. New files
-appear in committed batches; deletions are reconciled after each scan. Both
-traversal and queries run off the UI thread. Directory symlinks are not followed.
-Inaccessible directories, `.git`, `.cache`, `node_modules`, `Cache`, `Caches`, the
-recycle bin and Windows system volume metadata are skipped.
+**Windows uses [Everything](https://www.voidtools.com/)** through the official SDK's Unicode IPC protocol. Queries run off the UI thread with cancellation and bounded waits. An existing running Everything instance is reused; an installed instance is started in the background when needed. If Everything is missing, run `/index-setup`: the bundled, checksum-verified official installer opens with normal UAC. Keep its service enabled. It indexes NTFS/ReFS volumes and maintains live changes; configure Everything's folder indexing for other filesystems and network shares. Installation files and license provenance are in [`vendor/everything`](vendor/everything/README.md).
 
-To search additional drives or choose narrower roots, create `file-roots.txt` in:
+**Linux uses [plocate](https://plocate.sesse.net/)**. The first query starts an incremental `updatedb` scan of `/` as your normal user, including home subvolumes and mounted local drives. The old system database can supply initial results while the private index builds. Virtual/network filesystems and `.snapshots` are excluded. Permission-protected directories remain inaccessible. The private database lives in `$XDG_CACHE_HOME/kalwer/system.plocate` (normally `~/.cache/kalwer`) with owner-only access. Refreshes run every 15 minutes while Kalwer is running and reuse unchanged directory metadata. `/index-setup` installs plocate through your distribution's package manager if needed; `/reindex` then starts indexing. Quotes group Linux search terms, and standard locate wildcards are supported.
 
-- Linux: `$XDG_CACHE_HOME/kalwer` (normally `~/.cache/kalwer`).
-- Windows: `%LOCALAPPDATA%\Kalwer`.
+The former SQLite directory crawler is no longer linked or used. Its old `files-v2.sqlite` database and `file-roots.txt` setting are ignored; they may be removed with Kalwer stopped. No existing Everything configuration or system locate database is overwritten.
 
-Use one absolute UTF-8 path per line; lines beginning with `#` are comments.
-This replaces the default home root and is reread every scan. An empty file
-disables indexing. The directory also holds `files-v2.sqlite` and its WAL files.
-Delete these files with Kalwer stopped to rebuild the database from scratch.
-
-One- and two-character queries search filename prefixes. Three or more characters
-enable indexed substring matching anywhere in paths. Queries rank up to 512
-prefix matches and 1,024 substring candidates, returning at most 512 results.
-Broad searches can be partial: database work is capped at 200 ms, and typing a
-new query cancels the previous one. Each database connection uses an 8 MiB page
-cache. SQLite source provenance is recorded in
-[`vendor/sqlite/README.md`](vendor/sqlite/README.md).
-
-Indexer regression checks and a benchmark against an existing database:
+Regression checks:
 
 ```sh
-make vendor/sqlite/sqlite3.o
-g++ -std=c++20 -pthread tests/file_index_test.cpp vendor/sqlite/sqlite3.o -lm -o /tmp/kalwer-index-test
-/tmp/kalwer-index-test
-g++ -O2 -std=c++20 -pthread tests/file_index_benchmark.cpp vendor/sqlite/sqlite3.o -lm -o /tmp/kalwer-index-benchmark
-/tmp/kalwer-index-benchmark ~/.cache/kalwer
+g++ -O2 -std=c++20 -pthread tests/system_file_index_test.cpp -o /tmp/kalwer-system-index-test
+/tmp/kalwer-system-index-test
 ```
 
 ## Commands, completion and reusable popups

@@ -1,0 +1,27 @@
+name: System file search
+on:
+  push:
+    paths: ['system_file_index.hpp', 'tests/system_file_index_test.cpp', 'tests/everything_ipc_test.cpp', 'vendor/everything/**', '.github/workflows/file-search.yml']
+  pull_request:
+    paths: ['system_file_index.hpp', 'tests/system_file_index_test.cpp', 'tests/everything_ipc_test.cpp', 'vendor/everything/**', '.github/workflows/file-search.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  plocate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y plocate
+      - run: g++ -O2 -std=c++20 -pthread -Wall -Wextra -Wpedantic tests/system_file_index_test.cpp -o /tmp/kalwer-system-index-test
+      - run: /tmp/kalwer-system-index-test
+  everything-ipc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile native Windows IPC tests
+        shell: cmd
+        run: cl /nologo /std:c++20 /EHsc /utf-8 /W4 /DUNICODE /D_UNICODE tests\everything_ipc_test.cpp /Fe:everything-ipc-test.exe /link user32.lib
+      - name: Check Unicode replies, bounds, ranking and cancellation
+        run: .\everything-ipc-test.exe

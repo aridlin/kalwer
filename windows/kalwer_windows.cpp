@@ -1,4 +1,4 @@
-#include "../file_index.hpp"
+#include "../system_file_index.hpp"
 #include "../launcher_commands.hpp"
 #include "../update_status.hpp"
 #include <windows.h>
@@ -74,7 +74,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.5";
+constexpr wchar_t kKalwerVersion[] = L"0.5.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1673,13 +1673,37 @@ bool launch_application(const AppEntry& result, bool elevated = false) {
                                                     nullptr, nullptr, SW_SHOWNORMAL)) > 32;
 }
 
+void setup_everything() {
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(101), RT_RCDATA);
+    HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
+    const auto* data = loaded ? static_cast<const std::uint8_t*>(LockResource(loaded)) : nullptr;
+    const DWORD size = resource ? SizeofResource(module, resource) : 0;
+    if (!data || !size) { open_popup({"EVERYTHING SETUP", "The bundled installer is unavailable."}); return; }
+    std::vector<std::uint8_t> bytes(data, data + size);
+    if (sha256_hex(bytes) != "c42efad041d4c0bb4d4ac97ae7cbe89f153ec1fe078772392e749c7f5d5282d3") {
+        open_popup({"EVERYTHING SETUP", "Installer verification failed."}); return;
+    }
+    const auto directory = local_data_directory() / L"tools";
+    std::error_code error; std::filesystem::create_directories(directory, error);
+    const auto path = directory / L"Everything-1.4.1.1032.x64-Setup.exe";
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()); out.close();
+    if (!out || reinterpret_cast<INT_PTR>(ShellExecuteW(state.window, L"runas", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
+        open_popup({"EVERYTHING SETUP", "The installer could not be opened, or UAC was cancelled."}); return;
+    }
+    open_popup({"EVERYTHING SETUP", "The bundled official Everything installer is open. Keep the Everything service enabled. When installation finishes, type :query in Kalwer. Existing Everything installations are reused."});
+}
+
 void activate_selection(bool elevated = false) {
-    if (state.results.empty() || window_text(state.edit).substr(0, 1) == L":") return;
+    if (state.results.empty()) return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
         if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
+        else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: bundled Everything installer\n/reindex: ask Everything to rebuild"});
+        else if (name == "/index-setup") setup_everything();
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/exit") DestroyWindow(state.window);
         else if (name == "/settings") {
@@ -1687,7 +1711,7 @@ void activate_selection(bool elevated = false) {
             state.selection_visual = state.scroll_visual = 0; state.render_dirty = true;
         } else if (name == "/reindex") {
             file_index.refresh();
-            open_popup({"FILE INDEX", "A file index refresh was requested.\n\nUse :query to search while it runs.\nNew files appear as batches are saved.\n"});
+            open_popup({"FILE INDEX", "Everything was asked to rebuild its index.\n\nUse :query when it is ready. If Everything is missing, run /index-setup.\n"});
         } else for (const auto& c : kalwer::commands) if (c.name == name) {
             const auto replacement = wide(std::string(c.replacement));
             SetWindowTextW(state.edit, replacement.c_str());

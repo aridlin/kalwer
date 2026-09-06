@@ -1,3 +1,7 @@
 #include <windows.h>
 
 1 ICON "../assets/kalwer.ico"
+
+101 RCDATA "../vendor/everything/Everything-1.4.1.1032.x64-Setup.exe"
+102 RCDATA "../vendor/everything/License.txt"
+103 RCDATA "../vendor/everything/SDK-LICENSE.txt"

@@ -9,11 +9,8 @@ BINDIR ?= $(PREFIX)/bin
 
 all: elephant-field
 
-vendor/sqlite/sqlite3.o: vendor/sqlite/sqlite3.c vendor/sqlite/sqlite3.h
-	$(CC) -O2 -DSQLITE_ENABLE_FTS5 -DSQLITE_OMIT_LOAD_EXTENSION -c $< -o $@
-
-elephant-field: main.cpp elevation_linux.hpp file_index.hpp launcher_commands.hpp update_status.hpp vendor/sqlite/sqlite3.o
-	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags $(PKGS)) $< -o $@ $(shell pkg-config --libs $(PKGS)) vendor/sqlite/sqlite3.o -lm
+elephant-field: main.cpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp
+	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags $(PKGS)) $< -o $@ $(shell pkg-config --libs $(PKGS)) -lm
 
 install: elephant-field
 	install -Dm755 elephant-field $(DESTDIR)$(BINDIR)/elephant-field
@@ -22,4 +19,4 @@ install: elephant-field
 	install -Dm644 kalwer.desktop $(DESTDIR)$(PREFIX)/share/applications/kalwer.desktop
 
 clean:
-	rm -f elephant-field vendor/sqlite/sqlite3.o
+	rm -f elephant-field
