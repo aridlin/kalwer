@@ -1,0 +1,26 @@
+name: Windows release Defender scan
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Published candidate tag to scan alongside historical releases
+        required: true
+        default: v0.5.1
+        type: string
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['v0.3.1', 'v0.4.5', 'v0.5.0', '${{ inputs.release }}']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan exact release with updated Defender intelligence
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ matrix.release }}
+        run: ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG

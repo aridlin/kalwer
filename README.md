@@ -149,11 +149,30 @@ the launcher is hidden; Kalwer relaunches itself. Both platform updaters require
 and validate the executable format before installation; a failed or incomplete
 download leaves the current build intact.
 
+### Antivirus reports
+
+Windows builds are currently unsigned. Version information identifies the product,
+but is not an Authenticode signature or a promise of antivirus acceptance.
+If Defender blocks a download, leave protection enabled and do not add an exclusion.
+Record the exact threat name, release, file SHA-256 and Defender intelligence version.
+An on-demand scan on another machine or VirusTotal is not a guarantee that a
+download/cloud or runtime check will agree. Suspected false positives should be
+[submitted to Microsoft as a software developer](https://www.microsoft.com/en-us/wdsi/filesubmission).
+
+The manual `Windows release Defender scan` GitHub workflow checks exact released
+executables against updated Defender intelligence and logs their hashes. A missing
+scanner or failed scan is an error, never a pass. It does not change exclusions or
+disable protection. The same check can be run on Windows with
+`./windows/scan-release.ps1 -ReleaseTag v0.5.1` from an administrator PowerShell.
+Since v0.5.1, Kalwer no longer bundles or extracts the Everything installer;
+`/index-setup` opens the vendor's download page. This reduces unnecessary executable
+bundling, but does not establish the cause of historical detections.
+
 ## System-wide file search (Linux and Windows)
 
 Type `:report` or `:projects invoice` to search files and folders across the system. Enter opens the selected result. Names and paths are searched, not file contents. Results prefer exact filenames, then name prefixes/substrings, then path matches. Up to 512 results are shown; narrow broad searches to find a specific file. A bare `:` shows index status. `/index` explains the active backend and `/reindex` requests a refresh.
 
-**Windows uses [Everything](https://www.voidtools.com/)** through the official SDK's Unicode IPC protocol. Queries run off the UI thread with cancellation and bounded waits. An existing running Everything instance is reused; an installed instance is started in the background when needed. If Everything is missing, run `/index-setup`: the bundled, checksum-verified official installer opens with normal UAC. Keep its service enabled. It indexes NTFS/ReFS volumes and maintains live changes; configure Everything's folder indexing for other filesystems and network shares. Installation files and license provenance are in [`vendor/everything`](vendor/everything/README.md).
+**Windows uses [Everything](https://www.voidtools.com/)** through the official SDK's Unicode IPC protocol. Queries run off the UI thread with cancellation and bounded waits. An existing running Everything instance is reused; an installed instance is started in the background when needed. If Everything is missing, run `/index-setup`: its official download page opens in your browser. Install it normally and keep its service enabled. Kalwer does not embed or extract its installer. It indexes NTFS/ReFS volumes and maintains live changes; configure Everything's folder indexing for other filesystems and network shares. SDK license provenance is in [`vendor/everything`](vendor/everything/README.md).
 
 **Linux uses [plocate](https://plocate.sesse.net/)**. The first query starts an incremental `updatedb` scan of `/` as your normal user, including home subvolumes and mounted local drives. The old system database can supply initial results while the private index builds. Virtual/network filesystems and `.snapshots` are excluded. Permission-protected directories remain inaccessible. The private database lives in `$XDG_CACHE_HOME/kalwer/system.plocate` (normally `~/.cache/kalwer`) with owner-only access. Refreshes run every 15 minutes while Kalwer is running and reuse unchanged directory metadata. `/index-setup` installs plocate through your distribution's package manager if needed; `/reindex` then starts indexing. Quotes group Linux search terms, and standard locate wildcards are supported.
 

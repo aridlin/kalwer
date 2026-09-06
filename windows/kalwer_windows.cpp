@@ -74,7 +74,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.5.0";
+constexpr wchar_t kKalwerVersion[] = L"0.5.1";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1674,25 +1674,14 @@ bool launch_application(const AppEntry& result, bool elevated = false) {
 }
 
 void setup_everything() {
-    HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(101), RT_RCDATA);
-    HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
-    const auto* data = loaded ? static_cast<const std::uint8_t*>(LockResource(loaded)) : nullptr;
-    const DWORD size = resource ? SizeofResource(module, resource) : 0;
-    if (!data || !size) { open_popup({"EVERYTHING SETUP", "The bundled installer is unavailable."}); return; }
-    std::vector<std::uint8_t> bytes(data, data + size);
-    if (sha256_hex(bytes) != "c42efad041d4c0bb4d4ac97ae7cbe89f153ec1fe078772392e749c7f5d5282d3") {
-        open_popup({"EVERYTHING SETUP", "Installer verification failed."}); return;
+    // Let the browser and Windows handle the vendor's download and installation.
+    // Kalwer does not embed, extract, or elevate a third-party executable.
+    constexpr wchar_t url[] = L"https://www.voidtools.com/downloads/";
+    if (reinterpret_cast<INT_PTR>(ShellExecuteW(state.window, L"open", url,
+                                               nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
+        open_popup({"EVERYTHING SETUP", "Could not open your browser. Visit https://www.voidtools.com/downloads/ to install Everything."}); return;
     }
-    const auto directory = local_data_directory() / L"tools";
-    std::error_code error; std::filesystem::create_directories(directory, error);
-    const auto path = directory / L"Everything-1.4.1.1032.x64-Setup.exe";
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()); out.close();
-    if (!out || reinterpret_cast<INT_PTR>(ShellExecuteW(state.window, L"runas", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32) {
-        open_popup({"EVERYTHING SETUP", "The installer could not be opened, or UAC was cancelled."}); return;
-    }
-    open_popup({"EVERYTHING SETUP", "The bundled official Everything installer is open. Keep the Everything service enabled. When installation finishes, type :query in Kalwer. Existing Everything installations are reused."});
+    open_popup({"EVERYTHING SETUP", "The official Everything download page is open in your browser. Download and install Everything, keeping its service enabled. Then type :query in Kalwer. Existing installations are reused. Kalwer does not install third-party software itself."});
 }
 
 void activate_selection(bool elevated = false) {
@@ -1702,7 +1691,7 @@ void activate_selection(bool elevated = false) {
         const auto name = utf8(result.payload);
         if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
-        else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: bundled Everything installer\n/reindex: ask Everything to rebuild"});
+        else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: official Everything download page\n/reindex: ask Everything to rebuild"});
         else if (name == "/index-setup") setup_everything();
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/exit") DestroyWindow(state.window);

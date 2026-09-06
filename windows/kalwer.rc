@@ -2,6 +2,32 @@
 
 1 ICON "../assets/kalwer.ico"
 
-101 RCDATA "../vendor/everything/Everything-1.4.1.1032.x64-Setup.exe"
-102 RCDATA "../vendor/everything/License.txt"
 103 RCDATA "../vendor/everything/SDK-LICENSE.txt"
+
+1 VERSIONINFO
+FILEVERSION 0,5,1,0
+PRODUCTVERSION 0,5,1,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "aridlin\0"
+            VALUE "FileDescription", "Kalwer application and file launcher\0"
+            VALUE "FileVersion", "0.5.1.0\0"
+            VALUE "InternalName", "kalwer\0"
+            VALUE "OriginalFilename", "kalwer.exe\0"
+            VALUE "ProductName", "Kalwer\0"
+            VALUE "ProductVersion", "0.5.1\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
