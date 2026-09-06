@@ -143,8 +143,8 @@ timing/retention controls plus a current-user autostart toggle; it writes only
 the `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` `Kalwer` value and
 never requires administrator access. `/exit` terminates the resident instance.
 Update checks run off the input/render thread. A newer `kalwer.exe` is staged
-beside the running executable and atomically applied the next time the resident
-process starts. Both platform updaters require the matching release SHA-256 file
+beside the running executable and applied automatically once commands finish and
+the launcher is hidden; Kalwer relaunches itself. Both platform updaters require the matching release SHA-256 file
 and validate the executable format before installation; a failed or incomplete
 download leaves the current build intact.
 
@@ -227,9 +227,10 @@ restarts; a fresh installation does not show an update banner.
 
 `/updates` shows the running version and latest update status, including failures
 and package-manager-owned installations. Linux replaces the verified executable
-on disk; Windows stages the verified executable and applies it automatically on
-the next process launch. Active terminal sessions are not forcibly restarted.
-Checks run once per resident process. Android uses the system APK installer.
+on disk; Windows stages the verified executable. Both activate the update and
+relaunch automatically once the launcher is hidden and active commands finish,
+including background commands and administrator PTYs. No manual restart is needed.
+Checks run at startup, hourly, and when /updates is opened. Android uses the system APK installer.
 
 ### Run with elevated privileges
 
@@ -240,3 +241,5 @@ This release is delivered by the automatic updater, with the existing three-open
 `/updates` performs a fresh background check and updates its popup live. Resident desktop launchers also recheck hourly. Concurrent requests share the active check, preventing duplicate downloads.
 
 On Windows, Alt+Space closes an open popup even while another app has focus (same action as its × button, stopping an active command). Clicking Kalwer restores keyboard input so Escape works again.
+
+Popup dismissal reverses its opening timeline: the full contents compress vertically into the horizontal line, which retracts before the launcher fades away from the results toward the search bar. Text is transformed rather than rewrapped into a smaller layout. This also applies to help and other text popups.

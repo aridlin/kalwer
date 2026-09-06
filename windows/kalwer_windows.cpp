@@ -71,10 +71,10 @@ constexpr UINT kHotkeyId = 1;
 constexpr UINT kTimerId = 1;
 constexpr UINT kToggleMessage = WM_APP + 41;
 constexpr UINT kCommandChangedMessage = WM_APP + 42;
-constexpr UINT kCloseAdminPopupMessage = WM_APP + 43;
+constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.4.4";
+constexpr wchar_t kKalwerVersion[] = L"0.4.5";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -303,17 +303,21 @@ kalwer::UpdateStatus update_status;
 kalwer::UpdateBanner update_banner;
 bool updated_on_launch = false;
 std::wstring elevated_command;
-bool update_failed_on_launch = false;
+std::atomic<bool> update_failed_on_launch{false};
+std::atomic<bool> update_ready{false};
 void announce_update(const std::string& message) { update_status.set(message); }
 
 void check_for_update() {
+    if (update_failed_on_launch) { update_status.set("The update could not be applied. Run /updates to retry."); return; }
     if (running_under_wine()) { update_status.set("Automatic updates are disabled under Wine."); return; }
     const std::filesystem::path target = executable_path();
     if (target.empty()) return;
     std::filesystem::path pending = target;
     pending += L".update.exe";
     std::error_code error;
-    if (std::filesystem::exists(pending, error)) { announce_update("An update is ready. It will install automatically next time Kalwer starts."); return; }
+    if (std::filesystem::exists(pending, error)) {
+        if (updated_on_launch) { update_status.set("Update applied. Removing the completed installer…"); return; }
+        update_ready = true; announce_update("An update is ready. It will apply automatically when commands finish and Kalwer is hidden."); return; }
     std::filesystem::path partial = pending;
     partial += L".partial";
     {
@@ -376,7 +380,8 @@ void check_for_update() {
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::filesystem::remove(partial, error);
     } else {
-        attempt.complete("Kalwer v" + utf8(version) + " is downloaded and verified. It will install automatically next time Kalwer starts.");
+        attempt.complete("Kalwer v" + utf8(version) + " is verified. It will apply automatically when commands finish and Kalwer is hidden.");
+        update_ready = true;
     }
 }
 
@@ -573,6 +578,9 @@ struct State {
     bool hotkey_registered = false;
     bool settings_mode = false;
     bool popup_open = false;
+    bool popup_closing = false;
+    float popup_close_origin = 0;
+    std::chrono::steady_clock::time_point popup_closed_at{};
     bool notification_icon_added = false;
     std::wstring graphics_stage;
     std::uint32_t prompt_retention_ms = 3000;
@@ -1518,6 +1526,7 @@ std::wstring clipboard_text() {
 
 void open_popup_shell() {
     state.popup_open = true;
+    state.popup_closing = false;
     state.popup_opened_at = std::chrono::steady_clock::now();
     state.popup_selection_anchor = 0;
     state.popup_selection_end = 0;
@@ -1577,16 +1586,25 @@ void copy_job_output() {
     copy_text_to_clipboard(wide(output));
 }
 
+float popup_elapsed_ms() {
+    const auto now = std::chrono::steady_clock::now();
+    if (state.popup_closing) return std::max(0.0f, state.popup_close_origin -
+        std::chrono::duration<float, std::milli>(now - state.popup_closed_at).count());
+    return std::chrono::duration<float, std::milli>(now - state.popup_opened_at).count();
+}
+
 void close_popup(bool background, bool terminate) {
+    if (state.popup_closing || !state.popup_open) return;
+    state.popup_close_origin = std::min(popup_elapsed_ms(),
+        static_cast<float>(state.popup_line_ms + 170 + state.popup_expand_ms));
+    state.popup_closed_at = std::chrono::steady_clock::now();
+    state.popup_closing = true;
+    state.popup_selecting = false; state.popup_pressed = PopupButton::none;
+    ReleaseCapture();
     CommandJob* job = state.popup_job;
     if (background && job) job->background = true;
     if (terminate && job && job->running.load() && job->process) TerminateProcess(job->process, 130);
-    state.popup_open = false;
-    state.popup_job = nullptr;
-    state.popup_document.reset();
     state.render_dirty = true;
-    position_and_resize();
-    hide_launcher();
 }
 
 void add_background_results(std::vector<AppEntry>& output, const std::wstring& filter) {
@@ -1661,7 +1679,7 @@ void activate_selection(bool elevated = false) {
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
         if (name == "/help") open_popup(kalwer::help());
-        else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
+        else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/about") open_popup(kalwer::about());
         else if (name == "/exit") DestroyWindow(state.window);
         else if (name == "/settings") {
@@ -2490,8 +2508,7 @@ void draw_popup_button(const wchar_t* label, PopupButton button,
 
 float popup_animation_progress() {
     if (!state.popup_open) return 0.0f;
-    const float elapsed = std::chrono::duration<float, std::milli>(
-        std::chrono::steady_clock::now() - state.popup_opened_at).count();
+    const float elapsed = popup_elapsed_ms();
     const float unfold_start = state.popup_line_ms + 170.0f;
     const float value = (elapsed - unfold_start) / std::max(1.0f,
         static_cast<float>(state.popup_expand_ms));
@@ -2508,8 +2525,7 @@ void draw_command_popup() {
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
     constexpr float panel_top = 44.0f;
     constexpr float panel_bottom = 472.0f;
-    const float elapsed = std::chrono::duration<float, std::milli>(
-        std::chrono::steady_clock::now() - state.popup_opened_at).count();
+    const float elapsed = popup_elapsed_ms();
     auto eased = [](float value) {
         value = std::clamp(value, 0.0f, 1.0f);
         const float inverse = 1.0f - value;
@@ -2543,8 +2559,8 @@ void draw_command_popup() {
         D2D1::RectF(panel_left + 2, panel_top + 2, panel_right - 2, current_bottom - 2),
         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     render.d2d_context->SetTransform(
-        transform * D2D1::Matrix3x2F::Scale(1.0f, unfold,
-                                            D2D1::Point2F(0.0f, panel_top)));
+        D2D1::Matrix3x2F::Scale(1.0f, unfold,
+                              D2D1::Point2F(0.0f, panel_top)) * transform);
     std::wstring title = state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
@@ -2698,7 +2714,7 @@ HRESULT render_frame() {
     ID3D11ShaderResourceView* null_view = nullptr;
     render.d3d_context->PSSetShaderResources(0, 1, &null_view);
     result = render.swap_chain->Present(1, 0);
-    const bool popup_animating = state.popup_open && popup_animation_progress() < 0.999f;
+    const bool popup_animating = state.popup_closing || (state.popup_open && popup_animation_progress() < 0.999f);
     state.render_dirty = state.opening || state.closing || popup_animating ||
                          std::abs(target_selection - state.selection_visual) > 0.01f ||
                          std::abs(target_scroll - state.scroll_visual) > 0.01f;
@@ -2828,6 +2844,7 @@ void cleanup_jobs() {
 }
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (state.popup_closing && (message == WM_KEYDOWN || message == WM_CHAR || message == WM_PASTE)) return 0;
     if (state.popup_open && state.popup_document) {
         if (message == WM_KEYDOWN) {
             if (wparam == VK_ESCAPE) close_popup(false, false);
@@ -2992,6 +3009,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             else show_launcher();
             return 0;
         case WM_TIMER:
+            if (state.popup_closing && popup_elapsed_ms() <= 0) {
+                state.popup_open = false; state.popup_closing = false;
+                state.popup_job = nullptr; state.popup_document.reset();
+                position_and_resize(); hide_launcher();
+            }
+            if (update_ready && elevated_command.empty() && !state.visible && !state.popup_open &&
+                !FindWindowW(kWindowClass, kAdminWindowTitle) &&
+                std::none_of(state.jobs.begin(), state.jobs.end(), [](const auto& job) { return job->running.load(); })) {
+                update_ready = false;
+                const auto target = executable_path();
+                const auto pending = target.wstring() + L".update.exe";
+                if (launch_process(quote_argument(pending) + L" --apply-update " +
+                        std::to_wstring(GetCurrentProcessId()) + L" " + quote_argument(target.wstring()))) {
+                    DestroyWindow(state.window); return 0;
+                }
+                update_status.set("Could not start the updater. Run /updates to retry.");
+            }
             if (wparam == kTimerId + 1) { request_update_check(); return 0; }
             if (state.popup_document && state.popup_document->title == "KALWER UPDATES") {
                 const auto body = "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get();

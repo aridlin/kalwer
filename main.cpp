@@ -10,6 +10,7 @@
 #include <vte/vte.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -45,7 +46,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.4.4";
+constexpr const char* kKalwerVersion = "0.4.5";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -128,6 +129,11 @@ struct State {
     guint output_animation_source = 0;
     guint output_close_source = 0;
     gint64 output_opened_us = 0;
+    bool output_closing = false;
+    double output_close_origin = 0;
+    gint64 output_closed_us = 0;
+    cairo_surface_t* output_snapshot = nullptr;
+    GtkAllocation output_snapshot_bounds{};
     bool output_interacted = false;
     bool output_finished = false;
     int output_exit_status = 0;
@@ -236,6 +242,8 @@ bool run_capture(gchar* const argv[], std::string& output) {
 kalwer::UpdateStatus update_status;
 
 kalwer::UpdateBanner update_banner;
+std::atomic<bool> update_ready{false};
+std::string update_restart_path;
 void announce_update(const std::string& message) { update_status.set(message); }
 
 void check_for_update() {
@@ -244,7 +252,8 @@ void check_for_update() {
     if (g_file_get_contents(marker_path.c_str(), &installed, nullptr, nullptr)) {
         const std::string version = installed; g_free(installed);
         if (version_is_newer(version, kKalwerVersion)) {
-            update_status.set("Kalwer v" + version + " is installed on disk. Exit and reopen Kalwer to use it.");
+            update_status.set("Kalwer v" + version + " is installed. It will apply automatically when commands finish and Kalwer is hidden.");
+            update_ready = true;
             return;
         }
     }
@@ -390,7 +399,8 @@ void check_for_update() {
         gchar* parent = g_path_get_dirname(marker.c_str());
         g_mkdir_with_parents(parent, 0700); g_free(parent);
         g_file_set_contents(marker.c_str(), version.c_str(), -1, nullptr);
-        attempt.complete("Kalwer v" + version + " is installed on disk. Restart Kalwer to use it; running commands will continue until you close them.");
+        attempt.complete("Kalwer v" + version + " is installed. It will apply automatically when commands finish and Kalwer is hidden.");
+        update_ready = true;
     }
     g_free(curl);
 }
@@ -405,6 +415,10 @@ void request_update_check() {
 }
 
 void start_update_check() {
+    gchar* executable = g_file_read_link("/proc/self/exe", nullptr);
+    if (executable) { update_restart_path = executable; g_free(executable); }
+    const std::string deleted_suffix = " (deleted)";
+    if (update_restart_path.ends_with(deleted_suffix)) update_restart_path.resize(update_restart_path.size() - deleted_suffix.size());
     update_status.set(std::string("Running Kalwer v") + kKalwerVersion + ". Checking for updates…");
     const std::string marker = std::string(g_get_user_state_dir()) + "/kalwer/update-installed";
     gchar* installed = nullptr;
@@ -1436,12 +1450,35 @@ bool read_job_status(const std::string& session, int& exit_status) {
     return parsed;
 }
 
+gboolean output_animation_tick(GtkWidget*, GdkFrameClock*, gpointer);
+
+double output_elapsed_ms() {
+    if (state.output_closing) return std::max(0.0, state.output_close_origin -
+        (g_get_monotonic_time() - state.output_closed_us) / 1000.0);
+    return (g_get_monotonic_time() - state.output_opened_us) / 1000.0;
+}
+
 void close_output_and_kalwer() {
-    if (state.output_window) {
-        gtk_widget_destroy(state.output_window);
-    } else {
-        hide_kalwer();
+    if (!state.output_window) { hide_kalwer(); return; }
+    if (state.output_closing) return;
+    state.output_close_origin = std::min(output_elapsed_ms(),
+        state.popup_line_ms + 170.0 + state.popup_expand_ms);
+    if (state.output_content) {
+        gtk_widget_get_allocation(state.output_content, &state.output_snapshot_bounds);
+        const auto& bounds = state.output_snapshot_bounds;
+        state.output_snapshot = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+            std::max(1, bounds.width), std::max(1, bounds.height));
+        cairo_t* cr = cairo_create(state.output_snapshot);
+        gtk_widget_draw(state.output_content, cr); cairo_destroy(cr);
+        // Allocation coordinates may be relative to an intermediate GDK window.
+        gtk_widget_translate_coordinates(state.output_content, state.output_canvas, 0, 0,
+            &state.output_snapshot_bounds.x, &state.output_snapshot_bounds.y);
+        gtk_widget_set_opacity(state.output_content, 0);
+        gtk_widget_set_sensitive(state.output_content, FALSE);
     }
+    state.output_closing = true; state.output_closed_us = g_get_monotonic_time();
+    if (state.output_animation_source) gtk_widget_remove_tick_callback(state.output_canvas, state.output_animation_source);
+    state.output_animation_source = gtk_widget_add_tick_callback(state.output_canvas, output_animation_tick, nullptr, nullptr);
 }
 
 void mark_output_interaction() {
@@ -1495,7 +1532,7 @@ gboolean close_output_timeout(gpointer) {
 }
 
 gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
-    const double elapsed = (g_get_monotonic_time() - state.output_opened_us) / 1000.0;
+    const double elapsed = output_elapsed_ms();
     const double detach_start = state.popup_line_ms + 25.0;
     const double unfold_start = detach_start + 145.0;
     const double line_progress = ease_out_cubic_cpu(elapsed / state.popup_line_ms);
@@ -1528,12 +1565,28 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
     cairo_move_to(cr, line_start, hinge_y);
     cairo_line_to(cr, line_end, hinge_y);
     cairo_stroke(cr);
+    if (state.output_closing && state.output_snapshot && unfold_progress > 0) {
+        cairo_save(cr);
+        cairo_translate(cr, state.output_snapshot_bounds.x,
+            hinge_y + (state.output_snapshot_bounds.y - hinge_y) * unfold_progress);
+        cairo_scale(cr, 1, unfold_progress);
+        cairo_set_source_surface(cr, state.output_snapshot, 0, 0); cairo_paint(cr);
+        cairo_restore(cr);
+    }
     return FALSE;
 }
 
-gboolean output_animation_tick(GtkWidget*, GdkFrameClock* clock, gpointer) {
-    const double elapsed = (gdk_frame_clock_get_frame_time(clock) -
-                            state.output_opened_us) / 1000.0;
+gboolean output_animation_tick(GtkWidget*, GdkFrameClock*, gpointer) {
+    const double elapsed = output_elapsed_ms();
+    if (state.output_closing) {
+        if (elapsed <= 0) {
+            state.output_animation_source = 0;
+            gtk_widget_destroy(state.output_window);
+            return G_SOURCE_REMOVE;
+        }
+        gtk_widget_queue_draw(state.output_canvas);
+        return G_SOURCE_CONTINUE;
+    }
     const double unfold_start = state.popup_line_ms + 170.0;
     if (state.output_canvas) gtk_widget_queue_draw(state.output_canvas);
     if (state.output_content) {
@@ -1641,7 +1694,7 @@ void background_current_job(GtkButton*, gpointer) {
     if (state.output_session.empty()) return;
     mark_current_job_background();
     state.output_keep_session = true;
-    gtk_widget_destroy(state.output_window);
+    close_output_and_kalwer();
 }
 
 void continue_in_ghostty(GtkButton*, gpointer) {
@@ -1663,7 +1716,7 @@ void continue_in_ghostty(GtkButton*, gpointer) {
     if (error) g_error_free(error);
     if (!spawned) return;
     state.output_keep_session = true;
-    gtk_widget_destroy(state.output_window);
+    close_output_and_kalwer();
 }
 
 void output_destroyed(GtkWidget*, gpointer) {
@@ -1678,6 +1731,8 @@ void output_destroyed(GtkWidget*, gpointer) {
     state.output_close_source = 0;
     state.output_status_source = 0;
     state.output_window = nullptr;
+    state.output_closing = false;
+    if (state.output_snapshot) { cairo_surface_destroy(state.output_snapshot); state.output_snapshot = nullptr; }
     state.output_canvas = nullptr;
     state.output_content = nullptr;
     state.output_terminal = nullptr;
@@ -2961,6 +3016,18 @@ void activate(GtkApplication* app, gpointer) {
     state.app = app;
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
+    g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
+        if (!update_ready || update_restart_path.empty() || state.output_window ||
+            (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
+        for (const auto& job : state.jobs) {
+            int status = 0;
+            if (!read_job_status(job.session, status) && tmux_session_exists(job.session)) return G_SOURCE_CONTINUE;
+        }
+        update_ready = false;
+        execl(update_restart_path.c_str(), update_restart_path.c_str(), "--daemon", static_cast<char*>(nullptr));
+        update_status.set("Could not activate the installed update. Run /updates to retry.");
+        return G_SOURCE_CONTINUE;
+    }, nullptr);
     g_timeout_add_seconds(3600, +[](gpointer) -> gboolean { request_update_check(); return G_SOURCE_CONTINUE; }, nullptr);
     g_timeout_add(150, +[](gpointer) -> gboolean {
         if (state.output_updates && state.output_text) {
