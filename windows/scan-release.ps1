@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ReleaseTag,
     [string]$Repository = 'aridlin/kalwer',
-    [switch]$RequireRealtime
+    [switch]$RequireRealtime,
+    [switch]$RequireCloud
 )
 $ErrorActionPreference = 'Stop'
 if ($ReleaseTag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected a desktop release tag such as v0.5.1' }
@@ -42,6 +43,16 @@ if ($RequireRealtime) {
         throw 'Real-time protection could not be enabled; download check is unavailable.'
     }
 }
+if ($RequireCloud) {
+    if (-not $RequireRealtime) { throw '-RequireCloud also requires -RequireRealtime' }
+    Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
+    $preferences = Get-MpPreference
+    if ($preferences.MAPSReporting -ne 2 -or $preferences.SubmitSamplesConsent -ne 1 -or $preferences.DisableBlockAtFirstSeen) {
+        throw 'Cloud protection settings did not take effect; cloud check is unavailable.'
+    }
+    & (Get-ScannerPath) -ValidateMapsConnection
+    if ($LASTEXITCODE -ne 0) { throw 'Defender cloud connection could not be validated.' }
+}
 Get-MpComputerStatus | Select-Object AMEngineVersion, AMProductVersion, AntivirusSignatureVersion,
     AntivirusSignatureLastUpdated, AMRunningMode, RealTimeProtectionEnabled | Format-List
 Get-MpPreference | Select-Object MAPSReporting, SubmitSamplesConsent, DisableBlockAtFirstSeen | Format-List
@@ -50,6 +61,10 @@ $baseUrl = "https://github.com/$Repository/releases/download/$ReleaseTag"
 $sample = Join-Path $sampleDirectory 'kalwer.exe'
 Invoke-WebRequest "$baseUrl/kalwer.exe.sha256" -OutFile "$sample.sha256"
 Invoke-WebRequest "$baseUrl/kalwer.exe" -OutFile $sample
+if ($RequireCloud) {
+    # Preserve Internet provenance for the sample (main executable bytes unchanged).
+    Set-Content -LiteralPath $sample -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=$baseUrl/kalwer.exe"
+}
 $expected = ((Get-Content "$sample.sha256" -Raw) -split '\s+')[0].ToLowerInvariant()
 $actual = (Get-FileHash $sample -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($expected -notmatch '^[a-f0-9]{64}$' -or $expected -ne $actual) { throw 'Release checksum mismatch' }

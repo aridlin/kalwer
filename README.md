@@ -162,7 +162,11 @@ download/cloud or runtime check will agree. Suspected false positives should be
 The manual `Windows release Defender scan` GitHub workflow checks exact released
 executables against updated Defender intelligence and logs their hashes. A missing
 scanner or failed scan is an error, never a pass. It does not change exclusions or
-disable protection. The same check can be run on Windows with
+disable protection. Disposable CI runners explicitly enable real-time and cloud
+protection, allow safe sample submission to Microsoft, verify cloud connectivity,
+and mark samples as Internet downloads. No sample is executed. This still does not
+reproduce a particular browser or runtime behavior. The default local on-demand check
+does not change these protection settings and can be run on Windows with
 `./windows/scan-release.ps1 -ReleaseTag v0.5.1` from an administrator PowerShell.
 Since v0.5.1, Kalwer no longer bundles or extracts the Everything installer;
 `/index-setup` opens the vendor's download page. This reduces unnecessary executable
