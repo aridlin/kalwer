@@ -10,9 +10,9 @@ int main() {
         assert(!g.started && g.elapsed==0 && g.snake==snake);
         g.focused=true; g.key(' '); if(kind==Kind::minesweeper) g.reveal(40);
         advance(g,0.25); g.focused=false;
-        auto elapsed=g.elapsed; auto x=g.ballX,y=g.ballY; snake=g.snake; auto flags=g.flagged; auto aim=g.aim;
+        auto elapsed=g.elapsed; auto x=g.arcade.ballX,y=g.arcade.ballY; snake=g.snake; auto flags=g.flagged; auto aim=g.arcade.aim;
         g.key('r'); g.key('f'); g.pointer(350,460,1); g.pointer(280,300,1); advance(g,50);
-        assert(g.elapsed==elapsed && g.snake==snake && g.ballX==x && g.ballY==y && g.flagged==flags && g.aim==aim);
+        assert(g.elapsed==elapsed && g.snake==snake && g.arcade.ballX==x && g.arcade.ballY==y && g.flagged==flags && g.arcade.aim==aim);
         g.focused=true; advance(g,0.1); assert(g.elapsed>elapsed);
     }
     Game s(Kind::snake,1); s.focused=true; s.key(1); assert(!s.started); // no reversal
@@ -29,18 +29,8 @@ int main() {
     }
     Game m(Kind::minesweeper,1); m.focused=true; m.key('f'); m.key(' '); assert(!m.started); m.key('f'); m.key(' ');
     int mine=int(std::find(m.mines.begin(),m.mines.end(),-1)-m.mines.begin()); m.reveal(mine); assert(m.over && !m.won);
-    Game p(Kind::peggle,2); p.focused=true; p.key(' '); assert(p.flying && p.balls==9);
-    p.key(' '); assert(p.balls==9); advance(p,20); assert(!p.flying && p.score>0);
-    p.reset(); p.started=p.flying=true; p.balls=0; p.pegs={{210,210,true,true,false}}; p.ballY=428;
-    p.physics(1./240); assert(p.won && p.over);
-    p.reset(); p.started=p.flying=true; p.balls=0; p.ballX=35; p.ballY=428;
-    p.physics(1./240); assert(p.over && !p.won);
-    p.reset(); p.started=p.flying=true; p.balls=1; p.ballX=210; p.ballY=428;
-    p.physics(1./240); assert(p.balls==2 && !p.over);
-    for(int seed=0;seed<30;++seed) {
-        Game g(Kind::peggle,seed); g.focused=true;
-        for(int shot=0;shot<30 && !g.over;++shot) { g.aim=(seed%7-3)*0.3; g.key(' '); advance(g,19); assert(!g.flying && std::isfinite(g.ballX) && std::isfinite(g.ballY)); }
-        assert(g.over);
-    }
-    std::cout<<"Game rules, focus pause, safe reveal, collisions and round completion passed.\n";
+    Game p(Kind::peggle,2); p.focused=true; p.key(' ');
+    assert(p.arcade.flying && p.arcade.balls==9);
+    p.key(' '); assert(p.arcade.balls==9); advance(p,25); assert(!p.arcade.flying);
+    std::cout<<"Game rules, focus pause and safe reveal passed.\n";
 }

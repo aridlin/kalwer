@@ -32,6 +32,11 @@
 
 namespace {
 
+void theme_source_rgba(cairo_t* cr,double r,double g,double b,double a) {
+    unsigned c=kalwer::appearance.tint((unsigned(r*255)<<16)|(unsigned(g*255)<<8)|unsigned(b*255));
+    cairo_set_source_rgba(cr,((c>>16)&255)/255.,((c>>8)&255)/255.,(c&255)/255.,a);
+}
+
 constexpr int kWindowWidth = 650;
 constexpr int kWindowHeight = 632;
 constexpr double kSearchX = 15.0;
@@ -48,7 +53,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.6.0";
+constexpr const char* kKalwerVersion = "0.7.0";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -117,6 +122,7 @@ struct State {
     int surface_scale = 0;
     GLuint gl_program = 0;
     GLuint gl_texture = 0;
+    kalwer::GpuDither dither;
     GLuint gl_vertex_array = 0;
     int gl_texture_width = 0;
     int gl_texture_height = 0;
@@ -156,6 +162,8 @@ struct State {
     GtkWidget* settings_popup_line = nullptr;
     GtkWidget* settings_popup_expand = nullptr;
     GtkWidget* settings_output_close = nullptr;
+    GtkWidget *settings_popup_dither=nullptr,*settings_bw=nullptr,*settings_keep_halftone=nullptr,*settings_popup_halftone=nullptr;
+    GtkWidget *settings_dither=nullptr,*settings_theme=nullptr,*settings_opacity=nullptr,*settings_dither_scale=nullptr;
 };
 
 State state;
@@ -504,6 +512,10 @@ double bounded_setting(GKeyFile* file, const char* key, double fallback,
 }
 
 void load_settings() {
+    kalwer::appearance.directory=std::filesystem::path(g_get_user_config_dir())/"kalwer";
+    kalwer::appearance.load();
+    kalwer::wallet.path=std::filesystem::path(g_get_user_state_dir())/"kalwer"/"koins-v1";
+    kalwer::wallet.load();
     gchar* path = g_build_filename(g_get_user_config_dir(), "kalwer", "settings-v1.ini",
                                    nullptr);
     GKeyFile* file = g_key_file_new();
@@ -522,6 +534,7 @@ void load_settings() {
 }
 
 void save_settings() {
+    kalwer::appearance.save();
     gchar* directory = g_build_filename(g_get_user_config_dir(), "kalwer", nullptr);
     if (g_mkdir_with_parents(directory, 0700) != 0) {
         g_free(directory);
@@ -631,9 +644,9 @@ void draw_icon(cairo_t* cr, const std::string& name, double x, double y, double 
     }
 
     rounded_rectangle(cr, x, y, size, size, 8);
-    cairo_set_source_rgba(cr, 0.30, 0.68, 0.47, 0.90);
+    theme_source_rgba(cr, 0.30, 0.68, 0.47, 0.90);
     cairo_fill(cr);
-    cairo_set_source_rgba(cr, 0.0, 0.075, 0.043, 1.0);
+    theme_source_rgba(cr, 0.0, 0.075, 0.043, 1.0);
     cairo_select_font_face(cr, "JetBrainsMono Nerd Font", CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(cr, 19);
@@ -671,7 +684,7 @@ void draw_layout(cairo_t* cr, const std::string& text, double x, double y,
         pango_attr_list_unref(attributes);
     }
 
-    cairo_set_source_rgba(cr, red, green, blue, 1.0);
+    theme_source_rgba(cr, red, green, blue, 1.0);
     cairo_move_to(cr, x, y);
     pango_cairo_show_layout(cr, layout);
     pango_font_description_free(description);
@@ -715,11 +728,11 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
                              end_position.x / static_cast<double>(PANGO_SCALE);
         cairo_rectangle(cr, std::min(start_x, end_x), 30.0,
                         std::max(1.0, std::abs(end_x - start_x)), 25.0);
-        cairo_set_source_rgba(cr, 0.16, 0.48, 0.29, 0.92);
+        theme_source_rgba(cr, 0.16, 0.48, 0.29, 0.92);
         cairo_fill(cr);
     }
 
-    cairo_set_source_rgba(cr, 0.81, 0.89, 0.82, 1.0);
+    theme_source_rgba(cr, 0.81, 0.89, 0.82, 1.0);
     cairo_move_to(cr, text_x - scroll_x, text_y);
     pango_cairo_show_layout(cr, layout);
 
@@ -731,7 +744,7 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
         }
     }
     const double caret_x = text_x - scroll_x + cursor_layout_x;
-    cairo_set_source_rgba(cr, 0.62, 0.91, 0.70, 0.92);
+    theme_source_rgba(cr, 0.62, 0.91, 0.70, 0.92);
     cairo_rectangle(cr, caret_x, 31.0, 1.8, 23.0);
     cairo_fill(cr);
     cairo_restore(cr);
@@ -742,13 +755,13 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
 
 void draw_search(cairo_t* cr) {
     rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, kSearchHeight, 12);
-    cairo_set_source_rgba(cr, 0.0, 0.075, 0.043, 0.975);
+    theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
     cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 2.0);
-    cairo_set_source_rgba(cr, 0.31, 0.68, 0.47, 0.86);
+    theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.86);
     cairo_stroke(cr);
 
-    cairo_set_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
+    theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
     cairo_set_line_width(cr, 2.0);
     cairo_arc(cr, 40, 44, 9, 0, 2 * G_PI);
     cairo_stroke(cr);
@@ -764,6 +777,7 @@ void draw_search(cairo_t* cr) {
         draw_entry_contents(cr, query);
     }
 
+    draw_layout(cr, std::to_string(kalwer::wallet.balance)+" koins", 530, 17, "JetBrainsMono Nerd Font Bold 8", .75, .84, .65);
     draw_layout(cr, "KALWER", 67, 17, "JetBrainsMono Nerd Font Bold 7.5",
                 0.30, 0.68, 0.47);
     const bool completing = !state.completion_candidates.empty();
@@ -780,7 +794,7 @@ void draw_results(cairo_t* cr) {
     // surface, so the shader cuts the panel through the same dots as its rows.
     rounded_rectangle(cr, kSearchX, kResultsY - 6, kSearchWidth,
                       kWindowHeight - kResultsY - 4, 12);
-    cairo_set_source_rgba(cr, 0.0, 0.075, 0.043, 0.88);
+    theme_source_rgba(cr, 0.0, 0.075, 0.043, 0.88);
     cairo_fill(cr);
 
     cairo_save(cr);
@@ -800,10 +814,10 @@ void draw_results(cairo_t* cr) {
         // finished UI texture prevents the destination row from highlighting
         // before the animated outline/fill reaches it, and avoids a full
         // Cairo redraw plus texture upload on every arrow press.
-        cairo_set_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
+        theme_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
         cairo_fill_preserve(cr);
         cairo_set_line_width(cr, 1.0);
-        cairo_set_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
+        theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
         cairo_stroke(cr);
 
         draw_icon(cr, result.icon, kResultX + 12, y + 10, 38);
@@ -849,10 +863,10 @@ void draw_results(cairo_t* cr) {
         const double thumb_y = track_y + (track_height - thumb_height) *
             (maximum_offset > 0 ? state.scroll_visual / maximum_offset : 0.0);
         rounded_rectangle(cr, kSearchX + kSearchWidth - 7, track_y, 2.5, track_height, 1.25);
-        cairo_set_source_rgba(cr, 0.30, 0.68, 0.47, 0.18);
+        theme_source_rgba(cr, 0.30, 0.68, 0.47, 0.18);
         cairo_fill(cr);
         rounded_rectangle(cr, kSearchX + kSearchWidth - 7, thumb_y, 2.5, thumb_height, 1.25);
-        cairo_set_source_rgba(cr, 0.46, 0.82, 0.57, 0.80);
+        theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.80);
         cairo_fill(cr);
     }
 }
@@ -861,9 +875,10 @@ void repaint_finished_surface() {
     if (!state.finished_surface) return;
     cairo_t* cr = cairo_create(state.finished_surface);
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    theme_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_push_group(cr);
     cairo_save(cr);
     cairo_translate(cr, 0, update_banner.offset());
     draw_search(cr);
@@ -871,10 +886,12 @@ void repaint_finished_surface() {
     cairo_restore(cr);
     if (update_banner.visible()) {
         rounded_rectangle(cr, 15, 5, 620, 28, 6);
-        cairo_set_source_rgba(cr, 0.04, 0.22, 0.12, 0.98); cairo_fill(cr);
+        theme_source_rgba(cr, 0.04, 0.22, 0.12, 0.98); cairo_fill(cr);
         draw_layout(cr, std::string("Updated to v") + kKalwerVersion, 29, 11,
                     "JetBrainsMono Nerd Font SemiBold 10", 0.68, 0.94, 0.76);
     }
+    cairo_pattern_t* ui=cairo_pop_group(cr);
+    cairo_set_source(cr,ui);cairo_paint_with_alpha(cr,kalwer::appearance.mode?kalwer::appearance.opacity/100.:1.);cairo_pattern_destroy(ui);
     cairo_destroy(cr);
     cairo_surface_flush(state.finished_surface);
     state.texture_dirty = true;
@@ -933,11 +950,18 @@ bool initialize_gl() {
         in vec2 uv;
         out vec4 color;
         uniform sampler2D ui_texture;
+        uniform sampler2D backdrop_texture;
+        uniform vec2 backdrop_size;
+        uniform vec3 backdrop_dark;
+        uniform int has_backdrop;
         uniform vec2 logical_size;
         uniform float opening;
         uniform float selection_y;
         uniform int has_results;
         uniform int closing;
+        uniform int backdrop_mode;
+        uniform int keep_halftone;
+        uniform vec3 theme_accent;
 
         const int bayer[64] = int[64](
              0,48,12,60, 3,51,15,63,
@@ -962,6 +986,13 @@ bool initialize_gl() {
         void main() {
             vec2 point = uv * logical_size;
             vec4 ui = texture(ui_texture, uv);
+            if(has_backdrop!=0 && backdrop_mode!=0){
+                vec2 p=uv*backdrop_size;
+                vec3 value=texture(backdrop_texture,(floor(p)+.5)/backdrop_size).rgb;
+                float d=length(fract(p)-.5);
+                vec3 dots=mix(backdrop_dark,mix(backdrop_dark,value,.5),1.-smoothstep(.36,.49,d));
+                ui+=vec4(dots*.8,.8)*(1.-ui.a);
+            }
 
             if (has_results != 0) {
                 vec2 center = vec2(325.0, selection_y + 29.0);
@@ -972,7 +1003,7 @@ bool initialize_gl() {
                 vec4 fill = vec4(0.31, 0.68, 0.47, 0.07 * inside);
                 fill.rgb *= fill.a;
                 ui = fill + ui * (1.0 - fill.a);
-                vec4 border = vec4(0.46, 0.82, 0.57, 0.94 * outline);
+                vec4 border = vec4(theme_accent, 0.94 * outline);
                 border.rgb *= border.a;
                 ui = border + ui * (1.0 - border.a);
             }
@@ -1020,7 +1051,7 @@ bool initialize_gl() {
                                   site_radius - antialias,
                                   site_radius + antialias,
                                   length(point - center));
-            float coverage = point.y < halftone_start ? 1.0 : dot;
+            float coverage = backdrop_mode != 0 && keep_halftone==0 ? 1.0 : (point.y < halftone_start ? 1.0 : dot);
 
             float reveal_front = closing != 0
                                      ? ease_out_cubic(opening) *
@@ -1107,9 +1138,24 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
         state.texture_dirty = false;
     }
 
+    auto backdrop=kalwer::live_backdrop.copy();
+    bool has_backdrop=state.dither.update(backdrop);
+    glUseProgram(state.gl_program);glUniform1i(glGetUniformLocation(state.gl_program,"has_backdrop"),has_backdrop?1:0);
+    if(has_backdrop){
+        glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,state.dither.output);
+        glUniform1i(glGetUniformLocation(state.gl_program,"backdrop_texture"),1);
+        glUniform2f(glGetUniformLocation(state.gl_program,"backdrop_size"),state.dither.width,state.dither.height);
+        unsigned dark=kalwer::appearance.bw || kalwer::appearance.mode==5?0:kalwer::themes[kalwer::appearance.theme].background;
+        glUniform3f(glGetUniformLocation(state.gl_program,"backdrop_dark"),((dark>>16)&255)/255.f,((dark>>8)&255)/255.f,(dark&255)/255.f);
+        glActiveTexture(GL_TEXTURE0);
+    }
     const float progress = static_cast<float>(state.reveal_visual);
     glUseProgram(state.gl_program);
     glUniform1i(glGetUniformLocation(state.gl_program, "ui_texture"), 0);
+    glUniform1i(glGetUniformLocation(state.gl_program, "backdrop_mode"), kalwer::appearance.mode);
+    glUniform1i(glGetUniformLocation(state.gl_program,"keep_halftone"),kalwer::appearance.keep_halftone);
+    unsigned accent=kalwer::themes[kalwer::appearance.theme].accent;
+    glUniform3f(glGetUniformLocation(state.gl_program,"theme_accent"),((accent>>16)&255)/255.f,((accent>>8)&255)/255.f,(accent&255)/255.f);
     glUniform2f(glGetUniformLocation(state.gl_program, "logical_size"),
                 kWindowWidth, kWindowHeight);
     glUniform1f(glGetUniformLocation(state.gl_program, "opening"), progress);
@@ -1548,7 +1594,7 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
     constexpr double hinge_y = 18.0;
 
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    theme_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
@@ -1556,16 +1602,16 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
         const double height = 2.0 + (kOutputHeight - hinge_y - 8.0) * unfold_progress;
         cairo_rectangle(cr, line_start, hinge_y, kOutputWidth - line_start - 8.0,
                         height);
-        cairo_set_source_rgba(cr, 0.0, 0.075, 0.043, 0.975);
+        theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
         cairo_fill_preserve(cr);
-        cairo_set_line_width(cr, 1.5);
-        cairo_set_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
+        cairo_set_line_width(cr, state.output_game ? 2.0 : 1.5);
+        theme_source_rgba(cr, 0.46, 0.82, 0.57, 1.0);
         cairo_stroke(cr);
     }
 
     cairo_set_line_width(cr, 2.0);
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-    cairo_set_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
+    theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
     cairo_move_to(cr, line_start, hinge_y);
     cairo_line_to(cr, line_end, hinge_y);
     cairo_stroke(cr);
@@ -1784,13 +1830,24 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
         gtk_widget_set_visual(state.output_window, visual);
     }
 
+    if(game){
+        state.output_game=kalwer::games::create_game_canvas(state.output_window,*game,[]{
+            double elapsed=output_elapsed_ms();return std::array<double,3>{ease_out_cubic_cpu(elapsed/state.popup_line_ms),ease_out_cubic_cpu((elapsed-state.popup_line_ms-25)/120),ease_out_cubic_cpu((elapsed-state.popup_line_ms-170)/state.popup_expand_ms)};
+        },[]{close_output_and_kalwer();});
+        state.output_canvas=state.output_game;gtk_container_add(GTK_CONTAINER(state.output_window),state.output_game);
+        g_signal_connect(state.output_window,"key-press-event",G_CALLBACK(on_output_key),nullptr);
+        g_signal_connect(state.output_window,"delete-event",G_CALLBACK(+[](GtkWidget*,GdkEvent*,gpointer)->gboolean{close_output_and_kalwer();return TRUE;}),nullptr);
+        g_signal_connect(state.output_window,"destroy",G_CALLBACK(output_destroyed),nullptr);
+        gtk_widget_show_all(state.output_window);gtk_window_present(GTK_WINDOW(state.output_window));gtk_widget_grab_focus(state.output_game);
+        state.output_animation_source=gtk_widget_add_tick_callback(state.output_canvas,output_animation_tick,nullptr,nullptr);return;
+    }
     GtkWidget* overlay = gtk_overlay_new();
     state.output_canvas = gtk_drawing_area_new();
     gtk_widget_set_size_request(state.output_canvas, kOutputWidth, kOutputHeight);
     gtk_container_add(GTK_CONTAINER(overlay), state.output_canvas);
 
     state.output_content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_name(state.output_content, "kalwer-output-content");
+    gtk_widget_set_name(state.output_content, game ? "kalwer-game-content" : "kalwer-output-content");
     gtk_widget_set_halign(state.output_content, GTK_ALIGN_FILL);
     gtk_widget_set_valign(state.output_content, GTK_ALIGN_START);
     gtk_widget_set_margin_start(state.output_content, 19);
@@ -1826,7 +1883,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_box_pack_start(GTK_BOX(header), ghostty, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(header), background_button, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(header), close, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(state.output_content), header, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(state.output_content),header,FALSE,FALSE,0);
 
     if (terminal) {
     state.output_terminal = vte_terminal_new();
@@ -1863,10 +1920,11 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_container_add(GTK_CONTAINER(state.output_window), overlay);
 
     GtkCssProvider* css = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(css,
+    gtk_css_provider_load_from_data(css,kalwer::theme_css(
         "#kalwer-output-content { background: #00130b; border-radius: 0; }"
         "#kalwer-output-content textview, #kalwer-output-content textview text { background: #00130b; color: #cfe3d2; font-family: monospace; font-size: 11px; }"
-        "#kalwer-output-header { min-height: 29px; padding: 3px 4px; color: #cfe3d2; "
+        "#kalwer-game-content #kalwer-output-header { background: transparent; }"
+        "#kalwer-output-header { background: #00130b; min-height: 29px; padding: 3px 4px; color: #cfe3d2; "
         "font-family: 'JetBrainsMono Nerd Font'; font-size: 8px; font-weight: bold; }"
         ".kalwer-output-button { min-width: 24px; min-height: 20px; padding: 0 5px; "
         "background: #002e18; color: #9ee8b4; border: 1px solid #75d191; "
@@ -1877,7 +1935,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
         "border-color: #9ee8b4; box-shadow: inset 0 0 0 1px rgba(158,232,180,0.12); }"
         ".kalwer-output-button:active { background: #1f6b3e; color: #e8ffed; "
         "border-color: #9ee8b4; box-shadow: inset 0 2px 3px rgba(0,19,11,0.72); "
-        "text-shadow: 0 1px rgba(0,19,11,0.85); }", -1, nullptr);
+        "text-shadow: 0 1px rgba(0,19,11,0.85); }").c_str(), -1, nullptr);
     gtk_style_context_add_provider_for_screen(
         gtk_widget_get_screen(state.output_window), GTK_STYLE_PROVIDER(css),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -2371,6 +2429,14 @@ void save_settings_window(GtkButton*, gpointer) {
         GTK_SPIN_BUTTON(state.settings_popup_expand));
     state.output_close_ms = gtk_spin_button_get_value(
         GTK_SPIN_BUTTON(state.settings_output_close));
+    kalwer::appearance.mode=gtk_combo_box_get_active(GTK_COMBO_BOX(state.settings_dither));
+    kalwer::appearance.popup_mode=gtk_combo_box_get_active(GTK_COMBO_BOX(state.settings_popup_dither));
+    kalwer::appearance.bw=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state.settings_bw));
+    kalwer::appearance.keep_halftone=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state.settings_keep_halftone));
+    kalwer::appearance.popup_keep_halftone=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state.settings_popup_halftone));
+    kalwer::appearance.theme=gtk_combo_box_get_active(GTK_COMBO_BOX(state.settings_theme));
+    kalwer::appearance.opacity=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(state.settings_opacity));
+    kalwer::appearance.scale=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(state.settings_dither_scale));
     save_settings();
     close_settings_window();
 }
@@ -2424,7 +2490,7 @@ void show_settings_window() {
     gtk_widget_add_events(state.settings_window, GDK_KEY_PRESS_MASK);
 
     GtkCssProvider* css = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(css,
+    gtk_css_provider_load_from_data(css,kalwer::theme_css(
         "#kalwer-settings { background: #00130b; border: 2px solid #4fd079; }"
         "#kalwer-settings label { color: #cfe3d2; font-family: 'JetBrainsMono Nerd Font'; }"
         "#kalwer-settings .settings-kicker { color: #4fae78; font-size: 10px; font-weight: bold; }"
@@ -2433,7 +2499,7 @@ void show_settings_window() {
         "#kalwer-settings .setting-detail { color: #76aa85; font-size: 10px; }"
         "#kalwer-settings spinbutton { color: #cfe3d2; background: #001a0e; border: 1px solid #4fae78; border-radius: 0; }"
         "#kalwer-settings spinbutton button { color: #9ee8b4; background: #002414; border: 0; }"
-        "#kalwer-settings button.save { color: #00130b; background: #6cd590; border: 0; border-radius: 0; font-weight: bold; padding: 9px 18px; }",
+        "#kalwer-settings button.save { color: #00130b; background: #6cd590; border: 0; border-radius: 0; font-weight: bold; padding: 9px 18px; }").c_str(),
         -1, nullptr);
     gtk_style_context_add_provider_for_screen(
         gtk_widget_get_screen(state.settings_window), GTK_STYLE_PROVIDER(css),
@@ -2443,7 +2509,7 @@ void show_settings_window() {
     GtkWidget* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
     gtk_container_set_border_width(GTK_CONTAINER(outer), 22);
     GtkWidget* kicker = gtk_label_new("KALWER / SETTINGS");
-    GtkWidget* heading = gtk_label_new("TIMING & RETENTION");
+    GtkWidget* heading = gtk_label_new("APPEARANCE & TIMING");
     gtk_widget_set_halign(kicker, GTK_ALIGN_START);
     gtk_widget_set_halign(heading, GTK_ALIGN_START);
     gtk_style_context_add_class(gtk_widget_get_style_context(kicker), "settings-kicker");
@@ -2471,7 +2537,32 @@ void show_settings_window() {
                      state.settings_popup_expand);
     add_settings_row(grid, 3, "COMMAND AUTO-CLOSE", "Delay after a finished untouched command (ms)",
                      state.settings_output_close);
-    gtk_box_pack_start(GTK_BOX(outer), grid_widget, TRUE, TRUE, 0);
+    state.settings_dither=gtk_combo_box_text_new();
+    for(auto name:kalwer::dithers)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.settings_dither),name);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.settings_dither),kalwer::appearance.mode);
+    state.settings_theme=gtk_combo_box_text_new();
+    for(auto theme:kalwer::themes)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.settings_theme),theme.name);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.settings_theme),kalwer::appearance.theme);
+    state.settings_opacity=settings_spin(kalwer::appearance.opacity,30,95,1,5);
+    state.settings_dither_scale=settings_spin(kalwer::appearance.scale,1,8,1,1);
+    add_settings_row(grid,4,"KALWER DITHER","Live app backdrop on Hyprland",state.settings_dither);
+    add_settings_row(grid,5,"COLOR THEME","Shared across launcher and games",state.settings_theme);
+    add_settings_row(grid,6,"SURFACE OPACITY","Percent (30-95)",state.settings_opacity);
+    add_settings_row(grid,7,"DITHER PIXEL SIZE","Logical pixels (1-8)",state.settings_dither_scale);
+    state.settings_popup_dither=gtk_combo_box_text_new();
+    for(auto name:kalwer::dithers)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.settings_popup_dither),name);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.settings_popup_dither),kalwer::appearance.popup_mode);
+    add_settings_row(grid,8,"POPUP DITHER","Independent of the main launcher",state.settings_popup_dither);
+    state.settings_bw=gtk_check_button_new();gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_bw),kalwer::appearance.bw);
+    add_settings_row(grid,9,"BLACK-AND-WHITE BACKDROP","Threshold is always black and white",state.settings_bw);
+    state.settings_keep_halftone=gtk_check_button_new();gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_keep_halftone),kalwer::appearance.keep_halftone);
+    add_settings_row(grid,10,"KEEP KALWER HALFTONE","Combine halftone transparency with a dither",state.settings_keep_halftone);
+    state.settings_popup_halftone=gtk_check_button_new();gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_popup_halftone),kalwer::appearance.popup_keep_halftone);
+    add_settings_row(grid,11,"KEEP POPUP HALFTONE","Combine halftone transparency with a dither",state.settings_popup_halftone);
+    auto* scroll=gtk_scrolled_window_new(nullptr,nullptr);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(scroll,-1,400);gtk_container_add(GTK_CONTAINER(scroll),grid_widget);gtk_box_pack_start(GTK_BOX(outer),scroll,TRUE,TRUE,0);
+    GtkWidget* config_hint=gtk_label_new("/config-save and /config-load save and restore your preset");
+    gtk_box_pack_start(GTK_BOX(outer),config_hint,FALSE,FALSE,0);
 
     GtkWidget* save = gtk_button_new_with_label("SAVE & CLOSE");
     gtk_style_context_add_class(gtk_widget_get_style_context(save), "save");
@@ -2504,6 +2595,10 @@ void activate_selection(bool elevated = false) {
             stop_query(); state.opening = state.closing = false;
             state.hidden_us = g_get_monotonic_time(); gtk_widget_hide(state.window);
         }
+        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nSaved permanently on this device. Uses and upgrades are coming later."});
+        else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
+        else if (name == "/config-load") { bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored. Reopen Kalwer to see it.":"No readable preset found."}); }
+        else if (name == "/config") show_settings_window();
         else if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nplocate indexes readable local filesystems, including home and mounted local drives. Virtual filesystems and network filesystems are excluded.\n\n/index-setup: install plocate if needed\n/reindex: refresh the incremental index\n\nUpdates run every 15 minutes while Kalwer is running."});
@@ -3050,6 +3145,14 @@ void activate(GtkApplication* app, gpointer) {
     }
 
     state.app = app;
+    kalwer::live_backdrop.start();
+    g_timeout_add(160,+[](gpointer)->gboolean {
+        bool visible=(state.window && gtk_widget_get_visible(state.window)) || (state.output_window && gtk_widget_get_visible(state.output_window));
+        int mode=state.output_game?kalwer::appearance.popup_mode:kalwer::appearance.mode;
+        kalwer::live_backdrop.configure(visible,mode,kalwer::appearance.theme,kalwer::appearance.scale);
+        if(visible && mode) {if(state.window && gtk_widget_get_visible(state.window)){gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));}if(state.output_game)gtk_widget_queue_draw(state.output_game);}
+        return G_SOURCE_CONTINUE;
+    },nullptr);
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
@@ -3097,7 +3200,7 @@ void activate(GtkApplication* app, gpointer) {
     state.canvas = gtk_gl_area_new();
     gtk_gl_area_set_has_alpha(GTK_GL_AREA(state.canvas), TRUE);
     gtk_gl_area_set_auto_render(GTK_GL_AREA(state.canvas), FALSE);
-    gtk_gl_area_set_required_version(GTK_GL_AREA(state.canvas), 3, 3);
+    gtk_gl_area_set_required_version(GTK_GL_AREA(state.canvas), 4, 3);
     gtk_widget_set_size_request(state.canvas, kWindowWidth, kWindowHeight);
     gtk_widget_add_events(state.canvas, GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK |
                                         GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);

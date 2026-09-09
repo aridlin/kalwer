@@ -52,7 +52,7 @@ import java.util.Set;
 import pl.aridlin.kalwer.AppCatalog.App;
 
 public final class MainActivity extends Activity {
-    private static final int TEXT = 0xffd0e8d6, MUTED = 0xff92b89f, GREEN = 0xff79d394;
+    private static int TEXT = 0xffd0e8d6, MUTED = 0xff92b89f, GREEN = 0xff79d394;
     private AppCatalog catalog;
     private final AppCatalog.Callback catalogCallback = this::catalogLoaded;
     private final List<App> apps = new ArrayList<>();
@@ -67,8 +67,18 @@ public final class MainActivity extends Activity {
     private boolean catalogReady, loading;
     private String pendingSubmit;
     private int selected;
+    private boolean capturing;
+    private android.graphics.Bitmap popupSnapshot;
+    private static final int CAPTURE=901,EXPORT_CONFIG=902,IMPORT_CONFIG=903;
+    private final BackdropCaptureService.Receiver backdropReceiver=image->{
+        capturing=false;
+        if(isDestroyed() || isFinishing()){if(image!=null)image.recycle();return;}
+        getWindow().getDecorView().setAlpha(1);
+        if(image!=null){root.setSnapshot(image.launcher);if(popupSnapshot!=null)popupSnapshot.recycle();popupSnapshot=image.popup;}else Toast.makeText(this,"Backdrop unavailable; transparent surface retained",Toast.LENGTH_LONG).show();
+        showKeyboard();
+    };
     private final Runnable showIme = () -> {
-        if (!isFinishing() && query.hasWindowFocus()) {
+        if (!capturing && !isFinishing() && query.hasWindowFocus()) {
             ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(query, InputMethodManager.SHOW_IMPLICIT);
         }
     };
@@ -92,6 +102,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("kalwer", MODE_PRIVATE);
+        Appearance.load(prefs);applyPalette();
         catalog = AppCatalog.get(this);
         favourites = new HashSet<>(prefs.getStringSet("favourites", new HashSet<>()));
         getWindow().setBackgroundDrawableResource(android.R.color.transparent);
@@ -108,6 +119,7 @@ public final class MainActivity extends Activity {
         query.setSelection(query.length());
         if (state != null) selected = state.getInt("selected", 0);
         refreshResults();
+        if(Appearance.mode>0 || Appearance.popupMode>0)root.post(this::requestBackdrop);
     }
 
     private String retainedQuery() {
@@ -144,7 +156,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
-        if (focused) { immersive(); showKeyboard(); }
+        if (focused && !capturing) { immersive(); showKeyboard(); }
     }
 
     private void immersive() {
@@ -164,6 +176,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showKeyboard() {
+        if(capturing)return;
         query.requestFocus();
         query.removeCallbacks(showIme);
         query.post(showIme);
@@ -199,7 +212,7 @@ public final class MainActivity extends Activity {
         });
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = text("KALWER", 14, GREEN);
+        TextView brand = text("KALWER · "+prefs.getLong("koins",0)+" koins", 12, GREEN);
         brand.setLetterSpacing(.16f);
         header.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
         header.addView(button("⚙", "Kalwer settings", this::settings), new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -307,7 +320,7 @@ public final class MainActivity extends Activity {
         if (query == null || adapter == null) return;
         results.clear();
         String q = query.getText().toString().trim();
-        if (q.equals("/settings")) {
+        if (q.equals("/settings") || q.equals("/config")) {
             results.add(new Result("Kalwer settings", "Transparency, query memory & controls", "⚙", this::settings, null));
         } else if (q.startsWith("?")) {
             if (!SearchLogic.googleQuery(q).isEmpty()) addGoogle(q);
@@ -450,6 +463,18 @@ public final class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(12), dp(24), dp(12));
+        final AlertDialog[] dialog={null};
+        addChoice(box,"Kalwer backdrop dither",Appearance.MODES,Appearance.mode,index->{Appearance.mode=index;prefs.edit().putInt("dither",index).apply();root.refresh();adapter.notifyDataSetChanged();});
+        addChoice(box,"Popup backdrop dither",Appearance.MODES,Appearance.popupMode,index->{Appearance.popupMode=index;prefs.edit().putInt("popup_dither",index).apply();});
+        addCheck(box,"Keep popup halftone with the selected dither",Appearance.popupHalftone,value->{Appearance.popupHalftone=value;prefs.edit().putBoolean("popup_keep_halftone",value).apply();});
+        addCheck(box,"Black-and-white backdrop (Threshold is always B/W)",Appearance.bw,value->{Appearance.bw=value;prefs.edit().putBoolean("backdrop_bw",value).apply();});
+        addCheck(box,"Keep Kalwer halftone with the selected dither",Appearance.keepHalftone,value->{Appearance.keepHalftone=value;prefs.edit().putBoolean("keep_halftone",value).apply();root.refresh();});
+        addChoice(box,"Color theme",Appearance.THEMES,Appearance.theme,index->{Appearance.theme=index;prefs.edit().putInt("theme",index).apply();applyPalette();root.refresh();adapter.notifyDataSetChanged();});
+        addChoice(box,"Dither pixel size",new String[]{"1","2","3","4","5","6","7","8"},Appearance.scale-1,index->{Appearance.scale=index+1;prefs.edit().putInt("dither_scale",index+1).apply();});
+        box.addView(button("REFRESH BACKDROP","Take a new backdrop snapshot",()->{if(dialog[0]!=null)dialog[0].dismiss();requestBackdrop();}));
+        box.addView(text("Dither modes use one screen snapshot with Android consent. Halftone needs no capture.",12,MUTED));
+        box.addView(button("EXPORT CONFIG","Export appearance config",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,"kalwer-config.json"),EXPORT_CONFIG)));
+        box.addView(button("IMPORT CONFIG","Import appearance config",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE),IMPORT_CONFIG)));
         TextView opacity = text("", 14, TEXT);
         box.addView(opacity);
         SeekBar alpha = new SeekBar(this);
@@ -493,7 +518,56 @@ public final class MainActivity extends Activity {
         box.addView(help);
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.addView(box);
-        new AlertDialog.Builder(this).setTitle("Kalwer settings").setView(scroll).setPositiveButton("Done", null).show();
+        dialog[0]=new AlertDialog.Builder(this).setTitle("Kalwer settings · "+prefs.getLong("koins",0)+" koins").setView(scroll).setPositiveButton("Done",(d,which)->{
+            String value=query.getText().toString();buildUi();query.setText(value);refreshResults();if(Appearance.mode>0 || Appearance.popupMode>0)requestBackdrop();
+        }).create();dialog[0].show();
+        android.graphics.drawable.Drawable popupFill=new HalftoneDrawable(0xe600130b,GREEN,getResources().getDisplayMetrics().density,12,true);
+        if(Appearance.popupMode>0 && popupSnapshot!=null)popupFill=new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{new android.graphics.drawable.BitmapDrawable(getResources(),popupSnapshot),popupFill});
+        if(dialog[0].getWindow()!=null)dialog[0].getWindow().setBackgroundDrawable(popupFill);
+    }
+
+    private void addCheck(LinearLayout box,String title,boolean checked,java.util.function.Consumer<Boolean> changed){
+        android.widget.CheckBox check=new android.widget.CheckBox(this);check.setText(title);check.setTextColor(TEXT);check.setChecked(checked);check.setOnCheckedChangeListener((button,value)->changed.accept(value));box.addView(check);
+    }
+    private void addChoice(LinearLayout box,String title,String[] choices,int selected,java.util.function.IntConsumer choose){
+        box.addView(text(title,14,TEXT));android.widget.Spinner control=new android.widget.Spinner(this);
+        control.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,choices));control.setSelection(selected);box.addView(control);
+        control.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int i,long id){choose.accept(i);}});
+    }
+    private void applyPalette(){TEXT=0xff000000|Appearance.TEXT[Appearance.theme];GREEN=0xff000000|Appearance.ACCENT[Appearance.theme];MUTED=Appearance.tint(0xff92b89f);}
+    private void requestBackdrop(){
+        if((Appearance.mode==0 && Appearance.popupMode==0) || capturing)return;
+        capturing=true;query.removeCallbacks(showIme);
+        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
+        android.media.projection.MediaProjectionManager manager=getSystemService(android.media.projection.MediaProjectionManager.class);
+        Intent intent=Build.VERSION.SDK_INT>=34?manager.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay()):manager.createScreenCaptureIntent();
+        startActivityForResult(intent,CAPTURE);
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data){
+        super.onActivityResult(request,result,data);
+        if(request==CAPTURE){
+            if(result!=RESULT_OK || data==null){capturing=false;showKeyboard();return;}
+            getWindow().getDecorView().setAlpha(0);BackdropCaptureService.receiver=new java.lang.ref.WeakReference<>(backdropReceiver);
+            root.postDelayed(()->{
+                if(isFinishing() || isDestroyed()){capturing=false;return;}
+                android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();
+                Intent service=new Intent(this,BackdropCaptureService.class).putExtra("consent",data).putExtra("width",Math.max(1,metrics.widthPixels)).putExtra("height",Math.max(1,metrics.heightPixels));
+                try{startForegroundService(service);}catch(RuntimeException e){backdropReceiver.captured(null);}
+            },600);return;
+        }
+        if(result!=RESULT_OK || data==null || data.getData()==null)return;
+        try {
+            if(request==EXPORT_CONFIG){try(java.io.OutputStream out=getContentResolver().openOutputStream(data.getData())){if(out==null)throw new java.io.IOException();out.write(Appearance.export(prefs).getBytes(java.nio.charset.StandardCharsets.UTF_8));}}
+            if(request==IMPORT_CONFIG){try(java.io.InputStream in=getContentResolver().openInputStream(data.getData())){
+                if(in==null)throw new java.io.IOException();java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] bytes=new byte[1024];int count;
+                while((count=in.read(bytes))!=-1){out.write(bytes,0,count);if(out.size()>8192)throw new java.io.IOException("Config is too large");}
+                Appearance.importConfig(prefs,out.toString("UTF-8"));applyPalette();String value=query.getText().toString();buildUi();query.setText(value);refreshResults();
+            }}
+            Toast.makeText(this,request==EXPORT_CONFIG?"Config exported":"Config imported",Toast.LENGTH_SHORT).show();
+        }catch(Exception e){Toast.makeText(this,"Could not read or write that config",Toast.LENGTH_LONG).show();}
+    }
+    @Override protected void onDestroy(){
+        query.removeCallbacks(showIme);if(capturing){BackdropCaptureService.receiver.clear();stopService(new Intent(this,BackdropCaptureService.class));}super.onDestroy();
     }
 
     private final class ResultAdapter extends BaseAdapter {

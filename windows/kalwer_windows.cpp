@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <windowsx.h>
 #include "../games.hpp"
+#include "../live_backdrop.hpp"
+#include "../gpu_dither_windows.hpp"
 #include <commctrl.h>
 #include <bcrypt.h>
 #include <d2d1_1.h>
@@ -45,6 +47,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <map>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -75,7 +78,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.6.0";
+constexpr wchar_t kKalwerVersion[] = L"0.7.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -833,6 +836,8 @@ std::uint32_t bounded_unsigned(const std::string& value, std::uint32_t fallback,
 }
 
 void load_settings() {
+    kalwer::appearance.directory=local_data_directory();kalwer::appearance.load();
+    kalwer::wallet.path=local_data_directory()/L"koins-v1";kalwer::wallet.load();
     std::ifstream input(local_data_directory() / L"settings-v1.ini", std::ios::binary);
     std::string line;
     while (std::getline(input, line)) {
@@ -853,6 +858,7 @@ void load_settings() {
 }
 
 void save_settings() {
+    kalwer::appearance.save();
     const auto directory = local_data_directory();
     std::error_code error;
     std::filesystem::create_directories(directory, error);
@@ -1156,6 +1162,14 @@ void adjust_setting(int direction) {
         case 4:
             state.output_close_ms = adjust(state.output_close_ms, 250, 0, 30000);
             break;
+        case 5: kalwer::appearance.mode=(kalwer::appearance.mode+direction+6)%6;break;
+        case 6: kalwer::appearance.theme=(kalwer::appearance.theme+direction+6)%6;break;
+        case 7: kalwer::appearance.opacity=std::clamp(kalwer::appearance.opacity+direction*5,30,95);break;
+        case 9: kalwer::appearance.popup_mode=(kalwer::appearance.popup_mode+direction+6)%6;break;
+        case 10: kalwer::appearance.bw=!kalwer::appearance.bw;break;
+        case 11: kalwer::appearance.keep_halftone=!kalwer::appearance.keep_halftone;break;
+        case 12: kalwer::appearance.popup_keep_halftone=!kalwer::appearance.popup_keep_halftone;break;
+        case 8: kalwer::appearance.scale=std::clamp(kalwer::appearance.scale+direction,1,8);break;
         default:
             return;
     }
@@ -1266,7 +1280,7 @@ std::wstring suggested_completion() {
 
 void move_selection(int delta) {
     if (state.settings_mode) {
-        state.selection = std::clamp(state.selection + delta, 0, 4);
+        state.selection = std::clamp(state.selection + delta, 0, 12);
         state.scroll_offset = 0;
         state.render_dirty = true;
         return;
@@ -1700,6 +1714,10 @@ void activate_selection(bool elevated = false) {
             state.opening = state.closing = false;
             open_popup({name.substr(1), ""});
         }
+        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nSaved permanently on this device. Uses and upgrades are coming later."});
+        else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
+        else if (name == "/config-load") {bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored.":"No readable preset found."});}
+        else if (name == "/config") {state.settings_mode=true;state.selection=0;state.render_dirty=true;}
         else if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: official Everything download page\n/reindex: ask Everything to rebuild"});
@@ -1804,6 +1822,7 @@ Output main(uint id : SV_VertexID) {
 
 const char* kPixelShader = R"hlsl(
 Texture2D ui_texture : register(t0);
+Texture2D backdrop_texture : register(t1);
 SamplerState ui_sampler : register(s0);
 cbuffer Parameters : register(b0) {
     float2 logical_size;
@@ -1812,6 +1831,7 @@ cbuffer Parameters : register(b0) {
     int has_results;
     int closing;
     float2 padding;
+    float4 theme_accent;
 };
 
 static const float bayer[64] = {
@@ -1833,6 +1853,13 @@ float rounded_box(float2 value, float2 center, float2 half_size, float radius) {
 
 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float4 ui = ui_texture.SampleLevel(ui_sampler, uv, 0);
+    if(padding.x>.5){
+        uint w,h;backdrop_texture.GetDimensions(w,h);float2 p=uv*float2(w,h);
+        float3 value=backdrop_texture.Load(int3(min(int2(p),int2(w,h)-1),0)).rgb;
+        float3 dark=padding.x>=10 || (int(padding.x)%10)==5?float3(0,0,0):theme_accent.rgb*.09;float d=length(frac(p)-.5);
+        float3 dots=lerp(dark,lerp(dark,value,.5),1.-smoothstep(.36,.49,d));
+        ui+=float4(dots*.8,.8)*(1.-ui.a);
+    }
     float2 pixel_position = uv * logical_size;
 
     if (has_results != 0) {
@@ -1844,7 +1871,7 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         float4 fill = float4(0.31, 0.68, 0.47, 0.07 * inside);
         fill.rgb *= fill.a;
         ui = fill + ui * (1.0 - fill.a);
-        float4 border = float4(0.46, 0.82, 0.57, 0.94 * outline);
+        float4 border = float4(theme_accent.rgb, 0.94 * outline);
         border.rgb *= border.a;
         ui = border + ui * (1.0 - border.a);
     }
@@ -1881,6 +1908,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     float reveal = closing == 0 && pixel_position.y < 88.0
         ? 1.0
         : 1.0 - smoothstep(reveal_front - 2.0, reveal_front + 2.0, pixel_position.y);
+    if(padding.x>0.5 && theme_accent.a<.5) coverage=1;
+    if(padding.y>0) coverage=1;
     return ui * (coverage * reveal);
 })hlsl";
 
@@ -1980,7 +2009,7 @@ HRESULT create_graphics_device() {
     if (FAILED(result)) return result;
 
     D3D11_BUFFER_DESC constant_description{};
-    constant_description.ByteWidth = 32;
+    constant_description.ByteWidth = 48;
     constant_description.Usage = D3D11_USAGE_DYNAMIC;
     constant_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     constant_description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -2091,6 +2120,9 @@ HRESULT create_size_resources(UINT pixel_width, UINT pixel_height, float scale) 
 }
 
 void set_brush(D2D1_COLOR_F value) {
+    unsigned c=kalwer::appearance.tint((unsigned(value.r*255)<<16)|(unsigned(value.g*255)<<8)|unsigned(value.b*255));
+    value.r=((c>>16)&255)/255.f;value.g=((c>>8)&255)/255.f;value.b=(c&255)/255.f;
+    if(!state.popup_game && kalwer::appearance.mode && std::max({value.r,value.g,value.b})<.3f)value.a*=kalwer::appearance.opacity/100.f;
     state.render.brush->SetColor(value);
 }
 
@@ -2259,6 +2291,7 @@ void draw_search() {
     const wchar_t* help = state.settings_mode
         ? L"← → CHANGE   ENTER APPLY   ESC BACK"
         : L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
+    draw_text(std::to_wstring(kalwer::wallet.balance)+L" koins",render.tiny_format.Get(),530,15,620,30,color(.75f,.84f,.65f));
     draw_text(help, render.tiny_format.Get(), state.settings_mode ? 385.0f : 350.0f,
               58, 625, 72, color(0.46f, 0.67f, 0.52f));
 
@@ -2327,34 +2360,39 @@ void draw_settings() {
         L"PROMPT RETENTION",
         L"PTY LINE EXTENSION",
         L"PTY VERTICAL EXPANSION",
-        L"COMMAND AUTO-CLOSE",
+        L"COMMAND AUTO-CLOSE", L"KALWER DITHER", L"COLOR THEME", L"SURFACE OPACITY", L"DITHER DOT SIZE", L"POPUP DITHER", L"BLACK-AND-WHITE BACKDROP", L"KEEP KALWER HALFTONE", L"KEEP POPUP HALFTONE",
     };
     const std::wstring details[] = {
         L"Current-user startup entry; no administrator access",
         L"Restore the previous query after reopening",
         L"Horizontal connector animation phase",
         L"Rectangle and terminal-content stretch phase",
-        L"Delay after an untouched command finishes",
+        L"Delay after an untouched command finishes", L"Live desktop backdrop", L"Shared launcher and game palette", L"Transparent surface strength", L"Native resolution at 1", L"Independent popup effect", L"Threshold is always black and white", L"Halftone plus the selected backdrop dither", L"Halftone plus the selected popup dither",
     };
     const std::wstring values[] = {
         autostart_enabled() ? L"ON" : L"OFF",
         std::to_wstring(state.prompt_retention_ms) + L" MS",
         std::to_wstring(state.popup_line_ms) + L" MS",
         std::to_wstring(state.popup_expand_ms) + L" MS",
-        std::to_wstring(state.output_close_ms) + L" MS",
+        std::to_wstring(state.output_close_ms) + L" MS", wide(kalwer::dithers[kalwer::appearance.mode]),wide(kalwer::themes[kalwer::appearance.theme].name),std::to_wstring(kalwer::appearance.opacity)+L"%",std::to_wstring(kalwer::appearance.scale),wide(kalwer::dithers[kalwer::appearance.popup_mode]),L"",L"",L"",
     };
-    for (int row = 0; row < 5; ++row) {
-        const float y = kResultsY + row * kRowPitch;
-        fill_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+    for (int row = 0; row < 13; ++row) {
+        const float y = kResultsY + row * 40;
+        fill_round(kResultX, y, kResultX + kResultWidth, y + 38, 10.0f,
                    color(0.0f, 0.105f, 0.057f, 0.90f));
-        stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+        stroke_round(kResultX, y, kResultX + kResultWidth, y + 38, 10.0f,
                      1.0f, color(0.31f, 0.68f, 0.47f, 0.20f));
-        draw_text(titles[row], render.title_format.Get(), kResultX + 18, y + 8,
-                  kResultX + 445, y + 31, color(0.81f, 0.89f, 0.82f));
-        draw_text(details[row], render.subtitle_format.Get(), kResultX + 18, y + 33,
-                  kResultX + 475, y + 53, color(0.46f, 0.67f, 0.52f));
-        draw_text(values[row], render.title_format.Get(), kResultX + 474, y + 18,
-                  kResultX + 583, y + 43, color(0.62f, 0.91f, 0.70f));
+        draw_text(titles[row], render.subtitle_format.Get(), kResultX + 18, y + 3,
+                  kResultX + 445, y + 24, color(0.81f, 0.89f, 0.82f));
+        draw_text(details[row], render.subtitle_format.Get(), kResultX + 18, y + 21,
+                  kResultX + 475, y + 37, color(0.46f, 0.67f, 0.52f));
+        if(row>=10){
+            bool checked=row==10?kalwer::appearance.bw:row==11?kalwer::appearance.keep_halftone:kalwer::appearance.popup_keep_halftone;
+            float x=kResultX+510;stroke_round(x,y+10,x+18,y+28,3,1.5f,color(.55f,.91f,.7f));
+            if(checked){set_brush(color(.55f,.91f,.7f));render.d2d_context->DrawLine(D2D1::Point2F(x+4,y+19),D2D1::Point2F(x+8,y+23),render.brush.Get(),2);render.d2d_context->DrawLine(D2D1::Point2F(x+8,y+23),D2D1::Point2F(x+15,y+14),render.brush.Get(),2);}
+        }
+        draw_text(values[row], render.subtitle_format.Get(), kResultX + 474, y + 11,
+                  kResultX + 583, y + 36, color(0.62f, 0.91f, 0.70f));
     }
 }
 
@@ -2543,12 +2581,34 @@ float popup_animation_progress() {
 
 struct GamePainter {
     void tint(unsigned c) { set_brush(color(((c>>16)&255)/255.f,((c>>8)&255)/255.f,(c&255)/255.f)); }
-    void rect(double x,double y,double w,double h,unsigned c) { tint(c); state.render.d2d_context->FillRectangle(D2D1::RectF(float(x),float(y),float(x+w),float(y+h)),state.render.brush.Get()); }
+    void rect(double x,double y,double w,double h,unsigned c) {
+        if(c==0x081a18)return;
+        tint(c);auto& render=state.render;
+        bool surface=c==0x112e29 || c==0x2b5145 || c==0x183b32;
+        float alpha=surface?kalwer::appearance.opacity/100.f*(c==0x112e29?.9f:1.f):1.f;
+        if(surface && (!kalwer::appearance.popup_mode || kalwer::appearance.popup_keep_halftone)){
+            static ID2D1DeviceContext* owner=nullptr;static std::map<unsigned,ComPtr<ID2D1BitmapBrush>> patterns;
+            unsigned tint=kalwer::appearance.tint(c),key=tint|(unsigned(alpha*255)<<24);
+            if(owner!=render.d2d_context.Get() || patterns.size()>32){patterns.clear();owner=render.d2d_context.Get();}
+            auto& brush=patterns[key];
+            if(!brush){
+                unsigned pixels[49];for(int y=0;y<7;y++)for(int x=0;x<7;x++){
+                    float distance=std::hypot(x-3.f,y-3.f),coverage=std::clamp((3.f-distance)/.7f,0.f,1.f);unsigned a=unsigned(alpha*(.75f+.25f*coverage)*255);
+                    pixels[y*7+x]=(a<<24)|((((tint>>16)&255)*a/255)<<16)|((((tint>>8)&255)*a/255)<<8)|((tint&255)*a/255);
+                }
+                ComPtr<ID2D1Bitmap> bitmap;auto properties=D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+                if(SUCCEEDED(render.d2d_context->CreateBitmap(D2D1::SizeU(7,7),pixels,28,properties,&bitmap)))render.d2d_context->CreateBitmapBrush(bitmap.Get(),D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP,D2D1_EXTEND_MODE_WRAP,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR),D2D1::BrushProperties(),&brush);
+            }
+            if(brush){render.d2d_context->FillRectangle(D2D1::RectF(float(x),float(y),float(x+w),float(y+h)),brush.Get());return;}
+        }
+        render.brush->SetOpacity(alpha);render.d2d_context->FillRectangle(D2D1::RectF(float(x),float(y),float(x+w),float(y+h)),render.brush.Get());render.brush->SetOpacity(1);
+    }
     void circle(double x,double y,double r,unsigned c) { tint(c); state.render.d2d_context->FillEllipse(D2D1::Ellipse(D2D1::Point2F(float(x),float(y)),float(r),float(r)),state.render.brush.Get()); }
     void line(double x,double y,double a,double b,unsigned c,double width) { tint(c); state.render.d2d_context->DrawLine(D2D1::Point2F(float(x),float(y)),D2D1::Point2F(float(a),float(b)),state.render.brush.Get(),float(width)); }
     void text(double x,double y,double size,const std::string& text,unsigned c) {
-        ComPtr<IDWriteTextFormat> format;
-        state.render.write_factory->CreateTextFormat(L"Segoe UI",nullptr,DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,float(size),L"",format.GetAddressOf());
+        static std::map<int,ComPtr<IDWriteTextFormat>> formats;
+        auto& format=formats[int(size*10)];
+        if(!format)state.render.write_factory->CreateTextFormat(L"Segoe UI",nullptr,DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,float(size),L"",format.GetAddressOf());
         if(format) draw_text(wide(text),format.Get(),float(x),float(y-size),420,float(y+5),color(((c>>16)&255)/255.f,((c>>8)&255)/255.f,(c&255)/255.f));
     }
 };
@@ -2581,9 +2641,13 @@ void draw_command_popup() {
     if (unfold <= 0.0f) return;
 
     const float current_bottom = panel_top + (panel_bottom - panel_top) * unfold;
-    set_brush(color(0.0f, 0.075f, 0.043f, 0.985f));
+    set_brush(color(0.0f, 0.075f, 0.043f, state.popup_game?.08f:.985f));
     render.d2d_context->FillRectangle(
         D2D1::RectF(panel_left, panel_top, panel_right, current_bottom), render.brush.Get());
+    if(state.popup_game){
+        set_brush(color(0.0f,0.075f,0.043f,.88f));
+        render.d2d_context->FillRectangle(D2D1::RectF(panel_left,panel_top,panel_right,std::min(current_bottom,panel_top+50)),render.brush.Get());
+    }
     set_brush(color(0.46f, 0.82f, 0.57f, 0.98f));
     render.d2d_context->DrawRectangle(
         D2D1::RectF(panel_left, panel_top, panel_right, current_bottom),
@@ -2727,6 +2791,10 @@ HRESULT render_frame() {
     render.d3d_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     render.d3d_context->VSSetShader(render.vertex_shader.Get(), nullptr, 0);
     render.d3d_context->PSSetShader(render.pixel_shader.Get(), nullptr, 0);
+    static kalwer::WindowsDither dither;
+    auto backdrop=kalwer::live_backdrop.copy();bool has_backdrop=dither.update(render.d3d.Get(),render.d3d_context.Get(),backdrop,state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode);
+    ID3D11ShaderResourceView* backdrop_view=has_backdrop?dither.view.Get():nullptr;
+    render.d3d_context->PSSetShaderResources(1,1,&backdrop_view);
     ID3D11ShaderResourceView* view = render.ui_view.Get();
     render.d3d_context->PSSetShaderResources(0, 1, &view);
     ID3D11SamplerState* sampler = render.sampler.Get();
@@ -2743,6 +2811,7 @@ HRESULT render_frame() {
         std::int32_t has_results;
         std::int32_t closing;
         float padding[2];
+        float theme_accent[4];
     } parameters{
         static_cast<float>(state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
@@ -2750,7 +2819,8 @@ HRESULT render_frame() {
         kResultsY + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
         state.results.empty() || state.popup_game ? 0 : 1,
         state.closing ? 1 : 0,
-        {0.0f, 0.0f},
+        {has_backdrop?float(state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode)+(kalwer::appearance.bw?10.f:0.f):0.f,state.popup_game?kalwer::appearance.opacity/100.f:0.f},
+        {((kalwer::themes[kalwer::appearance.theme].accent>>16)&255)/255.f,((kalwer::themes[kalwer::appearance.theme].accent>>8)&255)/255.f,(kalwer::themes[kalwer::appearance.theme].accent&255)/255.f,kalwer::appearance.keep_halftone?1.f:0.f},
     };
     std::memcpy(mapped.pData, &parameters, sizeof(parameters));
     render.d3d_context->Unmap(render.constants.Get(), 0);
@@ -2759,6 +2829,7 @@ HRESULT render_frame() {
     render.d3d_context->Draw(3, 0);
     ID3D11ShaderResourceView* null_view = nullptr;
     render.d3d_context->PSSetShaderResources(0, 1, &null_view);
+    render.d3d_context->PSSetShaderResources(1, 1, &null_view);
     result = render.swap_chain->Present(1, 0);
     const bool popup_animating = state.popup_closing || (state.popup_open && popup_animation_progress() < 0.999f);
     state.render_dirty = state.opening || state.closing || popup_animating ||
@@ -2985,6 +3056,7 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
                 case VK_DOWN: move_selection(1); return 0;
                 case VK_LEFT: adjust_setting(-1); return 0;
                 case VK_RIGHT: adjust_setting(1); return 0;
+                case VK_SPACE: adjust_setting(1); return 0;
                 case VK_RETURN: adjust_setting(1); return 0;
                 case VK_ESCAPE: leave_settings(); return 0;
                 default: return 0;
@@ -3066,7 +3138,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             else if (state.visible) hide_launcher();
             else show_launcher();
             return 0;
-        case WM_TIMER:
+        case WM_TIMER: {
+            static auto backdrop_last=std::chrono::steady_clock::now();
+            if(std::chrono::steady_clock::now()-backdrop_last>std::chrono::milliseconds(160)) {
+                int mode=state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode;
+                bool capture=state.visible && mode>0 && SetWindowDisplayAffinity(state.window,0x11);
+                if(!mode)SetWindowDisplayAffinity(state.window,0);
+                {std::lock_guard lock(kalwer::live_backdrop.mutex);kalwer::live_backdrop.window=state.window;}
+                kalwer::live_backdrop.configure(capture,mode,kalwer::appearance.theme,kalwer::appearance.scale);
+                if(capture)state.render_dirty=true;
+                backdrop_last=std::chrono::steady_clock::now();
+            }
             if (state.popup_game) {
                 auto now=std::chrono::steady_clock::now();
                 state.popup_game->tick(std::chrono::duration<double>(now-state.game_last).count());
@@ -3121,6 +3203,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 if (elapsed >= kCloseDurationMs) finish_hide_launcher();
             }
             return 0;
+        }
         case kCommandChangedMessage: {
             CommandJob* job = find_job(static_cast<std::uint64_t>(wparam));
             if (job && lparam == 1 && job->background) show_job_notification(*job);
@@ -3176,11 +3259,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 logical_x <= kResultX + kResultWidth && logical_y >= kResultsY &&
                 row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                    (logical_y - kResultsY) / (state.settings_mode?40:kRowPitch) + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
                 const bool valid = state.settings_mode
-                    ? index >= 0 && index < 5
+                    ? index >= 0 && index < 13
                     : index >= 0 && index < static_cast<int>(state.results.size()) &&
                           local_y <= kRowHeight;
                 if (valid && index != state.selection) {
@@ -3238,10 +3321,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (logical_x >= kResultX && logical_x <= kResultX + kResultWidth &&
                 logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                    (logical_y - kResultsY) / (state.settings_mode?40:kRowPitch) + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
-                if (state.settings_mode && index < 5) {
+                if (state.settings_mode && index < 13) {
                     state.selection = index;
                     adjust_setting(1);
                 } else if (index >= 0 && index < static_cast<int>(state.results.size()) &&
@@ -3373,6 +3456,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     }
     load_favorites();
     load_settings();
+    kalwer::live_backdrop.start();
     if (!elevated_command.empty()) {
         SetTimer(state.window, kTimerId, 16, nullptr);
         show_launcher();

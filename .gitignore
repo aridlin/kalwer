@@ -2,3 +2,5 @@
 /elephant-field
 
 /vendor/sqlite/*.o
+
+/protocols/*.o

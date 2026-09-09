@@ -20,12 +20,15 @@ final class HalftoneDrawable extends Drawable {
 
     HalftoneDrawable anchor(View view) { anchor = view; return this; }
 
-    HalftoneDrawable(int color, int outline, float density, float radiusDp) {
+    HalftoneDrawable(int color,int outline,float density,float radiusDp){this(color,outline,density,radiusDp,false);}
+    HalftoneDrawable(int color, int outline, float density, float radiusDp,boolean popup) {
+        int mode=popup?Appearance.popupMode:Appearance.mode;boolean keep=popup?Appearance.popupHalftone:Appearance.keepHalftone;
+        color=Appearance.tint(color);outline=Appearance.tint(outline);
         radius = radiusDp * density;
         stroke = outline == Color.TRANSPARENT ? 0 : density;
         int size = Math.max(4, Math.round(8 * density));
         tileSize = size;
-        String key = color + ":" + size;
+        String key = color + ":" + size+":"+mode+":"+keep;
         Bitmap tile = TILES.get(key);
         if (tile == null) {
             tile = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
@@ -33,14 +36,14 @@ final class HalftoneDrawable extends Drawable {
             // The requested alpha is the dot opacity, never boosted to 255.
             // Even opaque panel colors retain a little background visibility.
             int dotAlpha = Math.min(Color.alpha(color), 242);
-            int gapAlpha = Math.round(dotAlpha * .4f);
+            int gapAlpha = (mode==0 || keep)?Math.round(dotAlpha * .4f):dotAlpha;
             int rgb = color & 0x00ffffff;
             canvas.drawColor((gapAlpha << 24) | rgb);
             Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
             dot.setColor((dotAlpha << 24) | rgb);
             // SRC preserves the requested alpha instead of compositing it onto the low-alpha base.
             dot.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
-            canvas.drawCircle(size * .5f, size * .5f, size * .399f, dot);
+            if((mode==0 || keep))canvas.drawCircle(size * .5f, size * .5f, size * .399f, dot);
             TILES.put(key, tile);
         }
         fill.setShader(new BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT));

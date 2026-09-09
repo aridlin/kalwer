@@ -1,9 +1,9 @@
 name: Native games
 on:
   push:
-    paths: ['games*.hpp', 'windows/kalwer_windows.cpp', 'tests/games_test.cpp', '.github/workflows/games.yml']
+    paths: ['peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   pull_request:
-    paths: ['games*.hpp', 'windows/kalwer_windows.cpp', 'tests/games_test.cpp', '.github/workflows/games.yml']
+    paths: ['peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,13 +12,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/games_test.cpp -o /tmp/games-test
-      - run: /tmp/games-test
+      - run: |
+          for test in games peggle appearance; do
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/${test}_test.cpp -o /tmp/${test}-test
+            /tmp/${test}-test
+          done
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
       - shell: cmd
-        run: cl /nologo /std:c++20 /EHsc /W4 tests\games_test.cpp /Fe:games-test.exe
-      - run: .\games-test.exe
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 tests\games_test.cpp /Fe:games-test.exe
+          cl /nologo /std:c++20 /EHsc /W4 tests\peggle_test.cpp /Fe:peggle-test.exe
+          cl /nologo /std:c++20 /EHsc /W4 tests\appearance_test.cpp /Fe:appearance-test.exe
+          cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib
+      - run: |
+          .\games-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\peggle-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\appearance-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\gpu-test.exe
+          exit $LASTEXITCODE

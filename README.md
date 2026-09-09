@@ -262,3 +262,77 @@ existing automatic updater. Android is unchanged.
 
 Game-rule and focus-pause tests run on Linux and Windows in the Native games
 workflow. Locally: `g++ -std=c++20 tests/games_test.cpp -o /tmp/games-test && /tmp/games-test`.
+
+## Peggle, koins, and appearance (v0.7.0)
+
+Peggle now has four rotating boards (Orbit, Cascade, Bloom, Fortress), round pegs
+and angled capsule bricks, fixed-step collision solving, and a curved trajectory
+preview using the same physics as the ball. Mouse/arrow aiming spans ±85°; Q/E
+make fine adjustments. Green `+` pegs blast nearby targets, cyan ring pegs extend
+the guide for three shots, green bucket pegs widen the catch for three shots,
+and purple bonus pegs score extra. Orange-clear multipliers rise through
+1×/2×/3×/5×/10×; a shot's combo increases every five hits up to 5×. A shot earns
+free balls at 2,500, 7,500, and 15,000 points, plus one for a bucket catch. Hit
+pulses, sparks, score labels, a short ball trail, and a recoiling launcher add
+motion. All gameplay and effects pause when the popup is unfocused.
+
+Wins award **koins** once per round: Minesweeper 30, a fully cleared Snake board
+75, and Peggle 50 plus 5 per remaining ball. `/koins` shows the permanent device
+wallet and win count. The balance also appears on the launcher. Spending and
+upgrades are reserved for a later release. Resetting a game or loading a config
+does not reset the wallet. Linux stores it in `$XDG_STATE_HOME/kalwer/koins-v1`
+(normally `~/.local/state/kalwer/koins-v1`); Windows stores it in Kalwer's local
+application data directory. No account or cross-device synchronization is used.
+
+`/settings` (also `/config`) offers:
+
+- Halftone (default), Atkinson, Floyd–Steinberg, Bayer 4×4, Bayer 8×8, Threshold.
+- Forest, Amber, Glacier, Rose, Violet, and Mono color themes.
+- Surface opacity (30–95%) and dither dot size (1–8, default 1).
+- Independent launcher and popup dither selections, each with a Keep Halftone checkbox.
+- Black-and-white backdrop checkbox. Threshold always uses pure black and white.
+
+`/config-save` writes the current appearance preset; `/config-load` restores it.
+These are editable `appearance.ini` and `preset.ini` files in Kalwer's config
+folder. Wallet data is deliberately separate from presets. Halftone transparency
+is applied to all three games without softening their text or game pieces.
+The game popup has a defined border and a dark, subtly dithered translucent title.
+
+Other dither modes process the actual **live underlying app windows** on
+Hyprland, captured with its toplevel export protocol and composited in stacking
+order, excluding Kalwer itself. Updates run off the UI thread at up to roughly
+6 Hz. The capture worker only supplies raw frames; OpenGL 4.3 compute on Linux
+and Direct3D 11 compute on Windows perform dithering at native resolution (Linux
+supersamples for fractional display scaling). Atkinson and Floyd–Steinberg use
+dependency-ordered error diffusion, not tiled approximations. Frames are immutable
+and uploaded only when changed; rounded stipples are composed by the GPU.
+Desktop wallpaper/layer surfaces outside app windows are not exported;
+those regions use a neutral backdrop. Other Wayland compositors retain normal
+transparency when this optional protocol is unavailable. Windows uses live
+capture with Kalwer excluded (Windows 10 2004+); a failed exclusion prevents
+capture to avoid visual feedback. This also excludes Kalwer from other screen
+captures while a live dither mode is selected. Captured pixels stay in memory;
+there are no screenshots written to disk or sent over a network.
+
+The Linux game, popup title and border share one GPU canvas with a reusable glyph atlas.
+Peggle caches its aim preview until the aim or board changes; collision checks
+reject distant pegs before expensive capsule math. Rendering is capped near 60 Hz
+for animated games and stops while unfocused. Static Minesweeper redraws on input
+and timer changes. Windows uses Direct2D and cached text formats.
+
+On Hyprland, compositor-wide opacity may otherwise make even controls transparent.
+A popup-only rule can keep application alpha authoritative:
+```ini
+windowrule = opacity 1.0 override 1.0 override, match:title ^Kalwer Command Output$
+windowrule = no_blur on, match:title ^Kalwer Command Output$
+```
+Third-party protocol notices are in `THIRD_PARTY_NOTICES.txt`.
+
+Android v0.3.0 applies the themes, dither selection, and opacity throughout the
+app. It uses a one-frame backdrop snapshot through Android's screen-sharing
+consent flow, processes it with a GLES 3.1 compute shader, then stops capture.
+No dither pixel loop runs on the Android UI thread. Devices without a compatible
+compute context retain transparency. Refresh it in settings; choosing
+Halftone needs no screen capture. Android settings can export/import a bounded
+JSON configuration through the system file picker. Android currently has no
+mini-games; its device wallet remains available for future features.

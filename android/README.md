@@ -5,8 +5,8 @@ the app focuses its search field and shows the keyboard. The green palette,
 monospaced type, rounded result cards and halftone field follow desktop Kalwer;
 the Android UI uses native views and a cached repeating alpha tile. The background
 and translucent panels alternate between more and less transparent areas in a
-halftone pattern; text and app icons stay crisp. There is no background service or
-continuous animation loop.
+halftone pattern; text and app icons stay crisp. The default Halftone mode needs no service or continuous animation loop.
+Optional snapshot capture uses a temporary foreground service.
 
 ## Performance
 
@@ -103,3 +103,29 @@ before distributing a production release. Keep the signing key outside Git.
 Halftone dot opacity follows the background opacity setting instead of being
 boosted to full opacity. Dots are capped at 95% opacity even for opaque panel
 colors; gaps use 40% of the dot alpha. Text and icons retain their own opacity.
+
+## v0.3.0 appearance and backdrop snapshots
+
+Settings now include six dither modes, six themes, dither pixel size, opacity,
+and JSON config import/export. Halftone remains the default and does not capture
+anything. Atkinson, Floyd–Steinberg, Bayer 4×4/8×8 and Threshold dither a real
+backdrop snapshot; text and icons remain native and crisp.
+
+Android requires screen-sharing consent for that snapshot. Kalwer briefly hides
+its own view and keyboard, captures a single frame in a short-lived media
+projection foreground service, restores the UI, and stops capture. No audio is
+captured and no screenshot is saved or uploaded. Canceling consent keeps normal
+transparency. Reopening a new Activity or using Refresh Backdrop requests a new
+snapshot; it is not a live recording. Protected content remains protected by
+Android. The snapshot service requests FOREGROUND_SERVICE and
+FOREGROUND_SERVICE_MEDIA_PROJECTION in addition to the existing alarm permission.
+
+Koins are device-local, kept separate from exported appearance configs. Android
+has no mini-games yet; its wallet display is ready for later features.
+
+Dither processing uses GLES 3.1 compute on a capture worker at native display
+resolution. The resulting snapshot is cached; normal UI rendering performs no
+diffusion or repeated capture. Launcher and popup modes are independent, with
+Keep Halftone toggles. Threshold is always black and white; a separate B/W
+checkbox applies to other backdrops without changing the UI theme. Unsupported
+GPU contexts keep the transparent surface and report that capture is unavailable.
