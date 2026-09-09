@@ -4,11 +4,11 @@ namespace kalwer::games {
 struct Shop {
     struct Item {const char* name;const char* detail;int cost;};
     static constexpr std::array<Item,5> items{{
-        {"Snake: wraparound","A separate arcade rule: cross the edges",150},
-        {"Garden: moonlit siege","A longer six-wave garden with stone beds",250},
-        {"Chess: walnut board","Warm wood squares and ivory pieces",90},
-        {"Peggle: prism board","An extra geometric board with brick arcs",200},
-        {"Aurora celebrations","Pink and blue win effects in every game",120}
+        {"Snake: wraparound","A separate arcade rule: cross the edges",3000},
+        {"Garden: moonlit siege","A longer six-wave garden with stone beds",7500},
+        {"Chess: walnut board","Warm wood squares and ivory pieces",1000},
+        {"Peggle: prism board","An extra geometric board with brick arcs",5000},
+        {"Aurora celebrations","Pink and blue win effects in every game",1500}
     }};
     int selected=0;
     std::string message="Unlocks are permanent. Base games stay free.";

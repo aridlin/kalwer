@@ -368,11 +368,11 @@ bounded branches across focused ticks and stops thinking while unfocused.
 
 | Unlock | Koins | Effect |
 | --- | ---: | --- |
-| Snake wraparound | 150 | Optional wrap rules; a full board earns 30 koins |
-| Moonlit Siege | 250 | Six-wave garden with stone planting beds |
-| Walnut chess board | 90 | Wood colors and ivory pieces |
-| Prism Peggle board | 200 | Extra peg arrangement and angled brick arcs |
-| Aurora celebrations | 120 | Pink/blue victory effects across the games |
+| Snake wraparound | 3,000 | Optional wrap rules; a full board earns 30 koins |
+| Moonlit Siege | 7,500 | Six-wave garden with stone planting beds |
+| Walnut chess board | 1,000 | Wood colors and ivory pieces |
+| Prism Peggle board | 5,000 | Extra peg arrangement and angled brick arcs |
+| Aurora celebrations | 1,500 | Pink/blue victory effects across the games |
 
 Click a card or select it with arrows and press Enter to buy. Purchased items
 are equipped immediately; selecting an owned item toggles it without spending
