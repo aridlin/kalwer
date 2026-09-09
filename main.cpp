@@ -1141,7 +1141,10 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     }
 
     auto backdrop=kalwer::live_backdrop.copy();
-    bool has_backdrop=state.dither.update(backdrop);
+    // Opening gets the GPU first; capture/compute starts after the reveal settles.
+    bool backdrop_ready=!state.opening && !state.closing &&
+        g_get_monotonic_time()-state.opened_us>=650000;
+    bool has_backdrop=backdrop_ready && state.dither.update(backdrop);
     glUseProgram(state.gl_program);glUniform1i(glGetUniformLocation(state.gl_program,"has_backdrop"),has_backdrop?1:0);
     if(has_backdrop){
         glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,state.dither.output);
@@ -3128,6 +3131,7 @@ void show_popup() {
     state.opening = true;
     state.reveal_visual = 0.0;
     state.opened_us = now;
+    kalwer::live_backdrop.configure(false,0,0,1);
     invalidate_surfaces();
     gtk_widget_show_all(state.window);
     gtk_window_present(GTK_WINDOW(state.window));
@@ -3151,8 +3155,11 @@ void activate(GtkApplication* app, gpointer) {
     g_timeout_add(160,+[](gpointer)->gboolean {
         bool visible=(state.window && gtk_widget_get_visible(state.window)) || (state.output_window && gtk_widget_get_visible(state.output_window));
         int mode=state.output_game?kalwer::appearance.popup_mode:kalwer::appearance.mode;
-        kalwer::live_backdrop.configure(visible,mode,kalwer::appearance.theme,kalwer::appearance.scale);
-        if(visible && mode) {if(state.window && gtk_widget_get_visible(state.window)){gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));}if(state.output_game)gtk_widget_queue_draw(state.output_game);}
+        bool settled=state.output_game
+            ? !state.output_closing && output_elapsed_ms()>state.popup_line_ms+170+state.popup_expand_ms+200
+            : !state.opening && !state.closing && g_get_monotonic_time()-state.opened_us>=650000;
+        kalwer::live_backdrop.configure(visible && settled,mode,kalwer::appearance.theme,kalwer::appearance.scale);
+        if(visible && settled && mode) {if(state.window && gtk_widget_get_visible(state.window)){gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));}if(state.output_game)gtk_widget_queue_draw(state.output_game);}
         return G_SOURCE_CONTINUE;
     },nullptr);
     start_update_check();

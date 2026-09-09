@@ -2793,7 +2793,9 @@ HRESULT render_frame() {
     render.d3d_context->VSSetShader(render.vertex_shader.Get(), nullptr, 0);
     render.d3d_context->PSSetShader(render.pixel_shader.Get(), nullptr, 0);
     static kalwer::WindowsDither dither;
-    auto backdrop=kalwer::live_backdrop.copy();bool has_backdrop=dither.update(render.d3d.Get(),render.d3d_context.Get(),backdrop,state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode);
+    auto backdrop=kalwer::live_backdrop.copy();
+    bool backdrop_ready=!state.opening && !state.closing && now-state.opened_at>=std::chrono::milliseconds(950);
+    bool has_backdrop=backdrop_ready && dither.update(render.d3d.Get(),render.d3d_context.Get(),backdrop,state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode);
     ID3D11ShaderResourceView* backdrop_view=has_backdrop?dither.view.Get():nullptr;
     render.d3d_context->PSSetShaderResources(1,1,&backdrop_view);
     ID3D11ShaderResourceView* view = render.ui_view.Get();
@@ -2904,6 +2906,7 @@ void show_launcher() {
     state.opening = true;
     state.closing = false;
     state.opened_at = now;
+    kalwer::live_backdrop.configure(false,0,0,1);
     state.last_render_at = now;
     state.selection_visual = static_cast<float>(state.selection);
     state.scroll_visual = static_cast<float>(state.scroll_offset);
@@ -3143,7 +3146,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             static auto backdrop_last=std::chrono::steady_clock::now();
             if(std::chrono::steady_clock::now()-backdrop_last>std::chrono::milliseconds(160)) {
                 int mode=state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode;
-                bool capture=state.visible && mode>0 && SetWindowDisplayAffinity(state.window,0x11);
+                bool settled=!state.opening && !state.closing && std::chrono::steady_clock::now()-state.opened_at>=std::chrono::milliseconds(950);
+                bool capture=state.visible && settled && mode>0 && SetWindowDisplayAffinity(state.window,0x11);
                 if(!mode)SetWindowDisplayAffinity(state.window,0);
                 {std::lock_guard lock(kalwer::live_backdrop.mutex);kalwer::live_backdrop.window=state.window;}
                 kalwer::live_backdrop.configure(capture,mode,kalwer::appearance.theme,kalwer::appearance.scale);
