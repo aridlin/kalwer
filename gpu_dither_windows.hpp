@@ -36,7 +36,7 @@ if(method==4)threshold=(4.*bayer[(p.y%4)*4+p.x%4]+bayer[(p.y/4%2)*4+p.x/4%2]/4.+
 float bit=value>=threshold?1.:0.;errorImage[p]=value-bit;resultImage[p]=float4(lerp(darkColor.rgb,lightColor.rgb,bit),1);}
 [numthreads(256,1,1)]void main(uint3 local:SV_GroupThreadID,uint3 globalId:SV_DispatchThreadID){
 if(method>2){int i=globalId.x;if(i<size.x*size.y)pixel(int2(i%size.x,i/size.x));return;}
-for(int diagonal=0;diagonal<size.x+2*size.y-2;++diagonal){for(int y=local.x;y<size.y;y+=256){int x=diagonal-2*y;if(x>=0&&x<size.x)pixel(int2(x,y));}AllMemoryBarrierWithGroupSync();}}
+for(int diagonal=0;diagonal<size.x+2*size.y-2;++diagonal){for(int base=0;base<size.y;base+=256){int y=base+local.x;int x=diagonal-2*y;if(y<size.y&&x>=0&&x<size.x)pixel(int2(x,y));}AllMemoryBarrierWithGroupSync();}}
 )";
             Ptr<ID3DBlob> blob,log;
             if(FAILED(D3DCompile(code,strlen(code),"KalwerDither",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&blob,&log))){
