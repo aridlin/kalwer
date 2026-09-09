@@ -1858,7 +1858,8 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         float3 value=backdrop_texture.Load(int3(min(int2(p),int2(w,h)-1),0)).rgb;
         float3 dark=padding.x>=10 || (int(padding.x)%10)==5?float3(0,0,0):theme_accent.rgb*.09;float d=length(frac(p)-.5);
         float3 dots=lerp(dark,lerp(dark,value,.5),1.-smoothstep(.36,.49,d));
-        ui+=float4(dots*.8,.8)*(1.-ui.a);
+        float panel_mask=smoothstep(0.0,0.1,ui.a);
+        ui+=float4(dots*.8,.8)*(1.-ui.a)*panel_mask;
     }
     float2 pixel_position = uv * logical_size;
 

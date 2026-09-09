@@ -38,7 +38,10 @@ final class GpuDither {
         finally {
             if(eglContext!=EGL14.EGL_NO_CONTEXT){GLES31.glDeleteTextures(3,textures,0);if(fbo!=0)GLES31.glDeleteFramebuffers(1,new int[]{fbo},0);if(program!=0)GLES31.glDeleteProgram(program);if(shader!=0)GLES31.glDeleteShader(shader);}
             EGL14.eglMakeCurrent(display,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_CONTEXT);
-            if(surface!=EGL14.EGL_NO_SURFACE)EGL14.eglDestroySurface(display,surface);if(eglContext!=EGL14.EGL_NO_CONTEXT)EGL14.eglDestroyContext(display,eglContext);EGL14.eglTerminate(display);EGL14.eglReleaseThread();
+            if(surface!=EGL14.EGL_NO_SURFACE)EGL14.eglDestroySurface(display,surface);if(eglContext!=EGL14.EGL_NO_CONTEXT)EGL14.eglDestroyContext(display,eglContext);
+            // EGL_DEFAULT_DISPLAY is shared with Android's UI renderer in this process.
+            // Terminating it also invalidates HWUI resources; only release our context/thread.
+            EGL14.eglReleaseThread();
         }
     }
     private static void color(int program,String name,int c){GLES31.glUniform3f(GLES31.glGetUniformLocation(program,name),((c>>16)&255)/255f,((c>>8)&255)/255f,(c&255)/255f);}

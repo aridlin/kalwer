@@ -991,7 +991,9 @@ bool initialize_gl() {
                 vec3 value=texture(backdrop_texture,(floor(p)+.5)/backdrop_size).rgb;
                 float d=length(fract(p)-.5);
                 vec3 dots=mix(backdrop_dark,mix(backdrop_dark,value,.5),1.-smoothstep(.36,.49,d));
-                ui+=vec4(dots*.8,.8)*(1.-ui.a);
+                // Transparent texture padding must stay transparent, including rounded corners.
+                float panel_mask=smoothstep(0.0,0.1,ui.a);
+                ui+=vec4(dots*.8,.8)*(1.-ui.a)*panel_mask;
             }
 
             if (has_results != 0) {
