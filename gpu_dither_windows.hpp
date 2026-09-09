@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <wrl.h>
+#include <cstdio>
 #include "live_backdrop.hpp"
 namespace kalwer {
 struct WindowsDither {
@@ -38,7 +39,10 @@ if(method>2){int i=globalId.x;if(i<size.x*size.y)pixel(int2(i%size.x,i/size.x));
 for(int diagonal=0;diagonal<size.x+2*size.y-2;++diagonal){for(int y=local.x;y<size.y;y+=256){int x=diagonal-2*y;if(x>=0&&x<size.x)pixel(int2(x,y));}AllMemoryBarrierWithGroupSync();}}
 )";
             Ptr<ID3DBlob> blob,log;
-            if(FAILED(D3DCompile(code,strlen(code),"KalwerDither",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&blob,&log)))return false;
+            if(FAILED(D3DCompile(code,strlen(code),"KalwerDither",nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&blob,&log))){
+                if(log)std::fwrite(log->GetBufferPointer(),1,log->GetBufferSize(),stderr);
+                return false;
+            }
             if(FAILED(device->CreateComputeShader(blob->GetBufferPointer(),blob->GetBufferSize(),nullptr,&shader)))return false;
             D3D11_BUFFER_DESC b{};b.ByteWidth=48;b.Usage=D3D11_USAGE_DEFAULT;b.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
             if(FAILED(device->CreateBuffer(&b,nullptr,&constants)))return false;

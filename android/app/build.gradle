@@ -18,7 +18,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    signingConfigs { debug { storeFile file(System.getProperty("user.home") + "/.android/debug.keystore") } }
+    // Reuse the installed APK's key locally; let AGP create its default key on clean CI.
+    def existingDebugKey = file(System.getProperty("user.home") + "/.android/debug.keystore")
+    if (existingDebugKey.exists()) {
+        signingConfigs { debug { storeFile existingDebugKey } }
+    }
     buildTypes {
         release { minifyEnabled false }
     }
