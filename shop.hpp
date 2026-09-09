@@ -23,13 +23,13 @@ struct Shop {
     void pointer(double x,double y,int button){if(button==1 && x>=22 && x<398 && y>=90 && y<390){selected=std::clamp(int((y-90)/60),0,4);activate();}}
     template<class P>void draw(P& p)const {
         p.text(24,57,17,"PERMANENT UNLOCKS",0xffd579);
-        p.text(24,77,11,"Buy once. Click an owned item to equip / unequip.",0x8dada1);
+        p.text(24,77,11,"Buy once. Toggle owned upgrades on / off freely.",0x8dada1);
         for(int i=0;i<5;i++) {
             double y=90+i*60;p.rect(22,y,376,55,i==selected?0x2b5145:0x112e29);
             if(i==selected)p.line(23,y+2,23,y+53,0x8ce9b3,3);
             p.text(32,y+19,14,items[i].name,0xe0f5e8);
             p.text(32,y+36,10,items[i].detail,0x8dada1);
-            p.text(32,y+49,10,wallet.has(i)?(wallet.uses(i)?"EQUIPPED - click to disable":"OWNED - click to equip"):"BUY  "+std::to_string(items[i].cost)+" koins",0xffd579);
+            p.text(32,y+49,10,wallet.has(i)?(wallet.uses(i)?"ON - click to disable":"OFF - click to enable"):"BUY  "+std::to_string(items[i].cost)+" koins",0xffd579);
         }
         p.text(24,419,11,message,0xe0f5e8);
         p.text(24,465,12,"Arrows: select   Enter: buy / equip",0x8dada1);
