@@ -22,12 +22,13 @@ final class GpuDither {
             int[] okay=new int[1];GLES31.glGetShaderiv(shader,GLES31.GL_COMPILE_STATUS,okay,0);if(okay[0]==0)throw new IllegalStateException(GLES31.glGetShaderInfoLog(shader));
             program=GLES31.glCreateProgram();GLES31.glAttachShader(program,shader);GLES31.glLinkProgram(program);GLES31.glGetProgramiv(program,GLES31.GL_LINK_STATUS,okay,0);if(okay[0]==0)throw new IllegalStateException("GPU link: "+GLES31.glGetProgramInfoLog(program)+" GL="+GLES31.glGetError()+" "+GLES31.glGetString(GLES31.GL_VERSION));
             int w=input.getWidth(),h=input.getHeight();GLES31.glGenTextures(3,textures,0);
-            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D,textures[0]);GLUtils.texImage2D(GLES31.GL_TEXTURE_2D,0,input,0);
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D,textures[0]);GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D,1,GLES31.GL_RGBA8,w,h);GLUtils.texSubImage2D(GLES31.GL_TEXTURE_2D,0,0,0,input);
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D,textures[1]);GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D,1,GLES31.GL_RGBA8,w,h);
             GLES31.glBindTexture(GLES31.GL_TEXTURE_2D,textures[2]);GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D,1,GLES31.GL_R32F,w,h);
             GLES31.glUseProgram(program);GLES31.glUniform2i(GLES31.glGetUniformLocation(program,"size"),w,h);GLES31.glUniform1i(GLES31.glGetUniformLocation(program,"method"),method);GLES31.glUniform1i(GLES31.glGetUniformLocation(program,"spacing"),1);
             color(program,"lightColor",(Appearance.bw || method==5?0xffffff:Appearance.TEXT[theme]));color(program,"darkColor",(Appearance.bw || method==5?0:Appearance.DARK[theme]));
             GLES31.glBindImageTexture(0,textures[0],0,false,0,GLES31.GL_READ_ONLY,GLES31.GL_RGBA8);GLES31.glBindImageTexture(1,textures[1],0,false,0,GLES31.GL_WRITE_ONLY,GLES31.GL_RGBA8);GLES31.glBindImageTexture(2,textures[2],0,false,0,GLES31.GL_READ_WRITE,GLES31.GL_R32F);
+            int bindingError=GLES31.glGetError();if(bindingError!=GLES31.GL_NO_ERROR)throw new IllegalStateException("GPU image bindings: "+bindingError);
             GLES31.glDispatchCompute(method<=2?1:(w*h+127)/128,1,1);GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT|GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             int[] fb=new int[1];GLES31.glGenFramebuffers(1,fb,0);fbo=fb[0];GLES31.glBindFramebuffer(GLES31.GL_FRAMEBUFFER,fbo);GLES31.glFramebufferTexture2D(GLES31.GL_FRAMEBUFFER,GLES31.GL_COLOR_ATTACHMENT0,GLES31.GL_TEXTURE_2D,textures[1],0);
             ByteBuffer bytes=ByteBuffer.allocateDirect(w*h*4).order(ByteOrder.nativeOrder());GLES31.glReadPixels(0,0,w,h,GLES31.GL_RGBA,GLES31.GL_UNSIGNED_BYTE,bytes);
