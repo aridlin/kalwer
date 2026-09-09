@@ -8,6 +8,9 @@ namespace kalwer {
 struct PopupDocument { std::string title, body; };
 struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
+    Command{"/snake", "Play native Snake (pauses when unfocused)", ""},
+    Command{"/minesweeper", "Play native Minesweeper", ""},
+    Command{"/peggle", "Play native peg-and-ball arcade", ""},
     Command{"/help", "Commands and keyboard shortcuts", ""},
     Command{"/files", "Search indexed files and folders", ":"},
     Command{"/apps", "Search applications", ""},

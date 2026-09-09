@@ -1,6 +1,8 @@
 #include "system_file_index.hpp"
 #include "launcher_commands.hpp"
 #include "update_status.hpp"
+#include "games_gtk.hpp"
+#include <optional>
 #include <gtk/gtk.h>
 #include "elevation_linux.hpp"
 #include <glib/gstdio.h>
@@ -46,7 +48,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.5.1";
+constexpr const char* kKalwerVersion = "0.6.0";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -124,6 +126,7 @@ struct State {
     GtkWidget* output_content = nullptr;
     GtkWidget* output_terminal = nullptr;
     GtkWidget* output_text = nullptr;
+    GtkWidget* output_game = nullptr;
     bool output_updates = false;
     GtkWidget* output_status = nullptr;
     guint output_animation_source = 0;
@@ -1461,6 +1464,7 @@ double output_elapsed_ms() {
 void close_output_and_kalwer() {
     if (!state.output_window) { hide_kalwer(); return; }
     if (state.output_closing) return;
+    if (state.output_game) kalwer::games::canvas_game(state.output_game)->focused = false;
     state.output_close_origin = std::min(output_elapsed_ms(),
         state.popup_line_ms + 170.0 + state.popup_expand_ms);
     if (state.output_content) {
@@ -1616,6 +1620,12 @@ gboolean on_output_key(GtkWidget*, GdkEventKey* event, gpointer) {
         close_output_and_kalwer();
         return TRUE;
     }
+    if (state.output_game) {
+        if (state.output_closing) return TRUE;
+        int k=event->keyval==GDK_KEY_Left?1:event->keyval==GDK_KEY_Right?2:event->keyval==GDK_KEY_Up?3:event->keyval==GDK_KEY_Down?4:event->keyval==GDK_KEY_Return?13:gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
+        kalwer::games::canvas_game(state.output_game)->key(k);
+        gtk_widget_queue_draw(state.output_game); return TRUE;
+    }
     if ((event->state & GDK_CONTROL_MASK) && (event->state & GDK_SHIFT_MASK)) {
         if (event->keyval == GDK_KEY_B || event->keyval == GDK_KEY_b) {
             background_current_job(nullptr, nullptr);
@@ -1737,6 +1747,7 @@ void output_destroyed(GtkWidget*, gpointer) {
     state.output_content = nullptr;
     state.output_terminal = nullptr;
     state.output_text = nullptr;
+    state.output_game = nullptr;
     state.output_updates = false;
     state.output_status = nullptr;
     state.output_session.clear();
@@ -1746,7 +1757,7 @@ void output_destroyed(GtkWidget*, gpointer) {
     hide_kalwer();
 }
 
-void open_popup(const kalwer::PopupDocument& document, const std::string& session = {}) {
+void open_popup(const kalwer::PopupDocument& document, const std::string& session = {}, std::optional<kalwer::games::Kind> game = std::nullopt) {
     if (state.output_window) return;
     const bool terminal = !session.empty();
     const std::string& command = document.title;
@@ -1832,6 +1843,9 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_widget_set_hexpand(state.output_terminal, TRUE);
     gtk_widget_set_vexpand(state.output_terminal, TRUE);
     gtk_box_pack_start(GTK_BOX(state.output_content), state.output_terminal, TRUE, TRUE, 0);
+    } else if (game) {
+        state.output_game = kalwer::games::create_game_canvas(state.output_window, *game);
+        gtk_box_pack_start(GTK_BOX(state.output_content), state.output_game, TRUE, TRUE, 0);
     } else {
         state.output_text = gtk_text_view_new();
         gtk_text_view_set_editable(GTK_TEXT_VIEW(state.output_text), FALSE);
@@ -1885,12 +1899,14 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     g_signal_connect(state.output_window, "destroy", G_CALLBACK(output_destroyed), nullptr);
 
     gtk_widget_show_all(state.output_window);
+    gtk_widget_set_visible(copy, !game);
+    if (game) gtk_label_set_text(GTK_LABEL(state.output_status), "GAME");
     gtk_widget_set_visible(ghostty, terminal);
     gtk_widget_set_visible(background_button, terminal);
     gtk_window_present(GTK_WINDOW(state.output_window));
     state.output_animation_source = gtk_widget_add_tick_callback(
         state.output_canvas, output_animation_tick, nullptr, nullptr);
-    if (!terminal) { gtk_widget_grab_focus(state.output_text); return; }
+    if (!terminal) { gtk_widget_grab_focus(game ? state.output_game : state.output_text); return; }
     state.output_status_source = g_timeout_add(100, poll_output_status, nullptr);
 
     gchar* argv[] = {
@@ -2483,7 +2499,12 @@ void activate_selection(bool elevated = false) {
     const Result result = state.results[state.selection];
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/help") open_popup(kalwer::help());
+        if (name == "/snake" || name == "/minesweeper" || name == "/peggle") {
+            open_popup({name.substr(1), ""}, {}, name == "/snake" ? kalwer::games::Kind::snake : name == "/minesweeper" ? kalwer::games::Kind::minesweeper : kalwer::games::Kind::peggle);
+            stop_query(); state.opening = state.closing = false;
+            state.hidden_us = g_get_monotonic_time(); gtk_widget_hide(state.window);
+        }
+        else if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nplocate indexes readable local filesystems, including home and mounted local drives. Virtual filesystems and network filesystems are excluded.\n\n/index-setup: install plocate if needed\n/reindex: refresh the incremental index\n\nUpdates run every 15 minutes while Kalwer is running."});
         else if (name == "/index-setup") {
@@ -3021,6 +3042,7 @@ void show_popup() {
 }
 
 void activate(GtkApplication* app, gpointer) {
+    if (state.output_game && state.output_window) { gtk_window_present(GTK_WINDOW(state.output_window)); return; }
     if (state.window) {
         if (gtk_widget_get_visible(state.window)) dismiss_popup();
         else show_popup();

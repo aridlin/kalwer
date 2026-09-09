@@ -240,3 +240,25 @@ This release is delivered by the automatic updater, with the existing three-open
 On Windows, Alt+Space closes an open popup even while another app has focus (same action as its × button, stopping an active command). Clicking Kalwer restores keyboard input so Escape works again.
 
 Popup dismissal reverses its opening timeline: the full contents compress vertically into the horizontal line, which retracts before the launcher fades away from the results toward the search bar. Text is transformed rather than rewrapped into a smaller layout. This also applies to help and other text popups.
+
+## Native popup games (v0.6.0)
+
+Type `/snake`, `/minesweeper`, or `/peggle` and press Enter. The launcher hides
+and the animated command-output popup moves to the top right and stays open until you explicitly close it with
+Escape or the popup close button. These are custom C++ games drawn with Cairo
+on Linux and Direct2D on Windows; no terminal, browser, or external game is launched.
+
+- **Snake:** arrows or WASD to steer, Space to start. Eat the orange food and avoid walls and your body.
+- **Minesweeper:** reveal with a left click; flag with a right click. Arrows/WASD move the cursor, Space/Enter reveal, and F flags. Find 10 mines on a 9×9 board; the first reveal and its neighbors are safe.
+- **Peggle:** an original peg-and-ball implementation with custom drawn graphics. Aim with the mouse or left/right arrows, then click the board or press Space/Enter to shoot. Clear all orange pegs with 10 balls. Catch a ball in the moving bucket to earn it back.
+
+Press R or click Restart for a new round. Gameplay, elapsed time, balls, and the
+bucket stop immediately when the game loses focus, then resume without catching
+up missed time. Losing focus and finishing a round never close the popup. The
+launcher shortcut brings the existing game back into focus. Automatic updates
+can download in the background but wait until the game is closed to restart.
+Desktop release assets and their SHA-256 files deliver these games through the
+existing automatic updater. Android is unchanged.
+
+Game-rule and focus-pause tests run on Linux and Windows in the Native games
+workflow. Locally: `g++ -std=c++20 tests/games_test.cpp -o /tmp/games-test && /tmp/games-test`.

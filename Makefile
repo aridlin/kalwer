@@ -9,7 +9,7 @@ BINDIR ?= $(PREFIX)/bin
 
 all: elephant-field
 
-elephant-field: main.cpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp
+elephant-field: main.cpp games.hpp games_gtk.hpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp
 	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags $(PKGS)) $< -o $@ $(shell pkg-config --libs $(PKGS)) -lm
 
 install: elephant-field

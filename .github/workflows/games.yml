@@ -1,0 +1,24 @@
+name: Native games
+on:
+  push:
+    paths: ['games*.hpp', 'windows/kalwer_windows.cpp', 'tests/games_test.cpp', '.github/workflows/games.yml']
+  pull_request:
+    paths: ['games*.hpp', 'windows/kalwer_windows.cpp', 'tests/games_test.cpp', '.github/workflows/games.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++20 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/games_test.cpp -o /tmp/games-test
+      - run: /tmp/games-test
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - shell: cmd
+        run: cl /nologo /std:c++20 /EHsc /W4 tests\games_test.cpp /Fe:games-test.exe
+      - run: .\games-test.exe

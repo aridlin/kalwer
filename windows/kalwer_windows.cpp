@@ -3,6 +3,7 @@
 #include "../update_status.hpp"
 #include <windows.h>
 #include <windowsx.h>
+#include "../games.hpp"
 #include <commctrl.h>
 #include <bcrypt.h>
 #include <d2d1_1.h>
@@ -74,7 +75,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.5.1";
+constexpr wchar_t kKalwerVersion[] = L"0.6.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -578,6 +579,8 @@ struct State {
     bool hotkey_registered = false;
     bool settings_mode = false;
     bool popup_open = false;
+    std::unique_ptr<kalwer::games::Game> popup_game;
+    std::chrono::steady_clock::time_point game_last{};
     bool popup_closing = false;
     float popup_close_origin = 0;
     std::chrono::steady_clock::time_point popup_closed_at{};
@@ -1599,6 +1602,7 @@ void close_popup(bool background, bool terminate) {
         static_cast<float>(state.popup_line_ms + 170 + state.popup_expand_ms));
     state.popup_closed_at = std::chrono::steady_clock::now();
     state.popup_closing = true;
+    if (state.popup_game) state.popup_game->focused = false;
     state.popup_selecting = false; state.popup_pressed = PopupButton::none;
     ReleaseCapture();
     CommandJob* job = state.popup_job;
@@ -1689,7 +1693,14 @@ void activate_selection(bool elevated = false) {
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
-        if (name == "/help") open_popup(kalwer::help());
+        if (name == "/snake" || name == "/minesweeper" || name == "/peggle") {
+            state.popup_game = std::make_unique<kalwer::games::Game>(name == "/snake" ? kalwer::games::Kind::snake : name == "/minesweeper" ? kalwer::games::Kind::minesweeper : kalwer::games::Kind::peggle);
+            state.popup_game->focused = GetForegroundWindow() == state.window;
+            state.game_last = std::chrono::steady_clock::now();
+            state.opening = state.closing = false;
+            open_popup({name.substr(1), ""});
+        }
+        else if (name == "/help") open_popup(kalwer::help());
         else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: official Everything download page\n/reindex: ask Everything to rebuild"});
         else if (name == "/index-setup") setup_everything();
@@ -2493,7 +2504,7 @@ PopupButton popup_button_at(float x, float y) {
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
     constexpr float top = 50.0f;
     if (y < top || y > top + 25.0f) return PopupButton::none;
-    if (x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
+    if (!state.popup_game && x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
     if (elevated_command.empty() && state.popup_job && x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
     if (x >= panel_right - 43 && x <= panel_right - 10) return PopupButton::close;
     return PopupButton::none;
@@ -2530,6 +2541,18 @@ float popup_animation_progress() {
     return 1.0f - inverse * inverse * inverse;
 }
 
+struct GamePainter {
+    void tint(unsigned c) { set_brush(color(((c>>16)&255)/255.f,((c>>8)&255)/255.f,(c&255)/255.f)); }
+    void rect(double x,double y,double w,double h,unsigned c) { tint(c); state.render.d2d_context->FillRectangle(D2D1::RectF(float(x),float(y),float(x+w),float(y+h)),state.render.brush.Get()); }
+    void circle(double x,double y,double r,unsigned c) { tint(c); state.render.d2d_context->FillEllipse(D2D1::Ellipse(D2D1::Point2F(float(x),float(y)),float(r),float(r)),state.render.brush.Get()); }
+    void line(double x,double y,double a,double b,unsigned c,double width) { tint(c); state.render.d2d_context->DrawLine(D2D1::Point2F(float(x),float(y)),D2D1::Point2F(float(a),float(b)),state.render.brush.Get(),float(width)); }
+    void text(double x,double y,double size,const std::string& text,unsigned c) {
+        ComPtr<IDWriteTextFormat> format;
+        state.render.write_factory->CreateTextFormat(L"Segoe UI",nullptr,DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,float(size),L"",format.GetAddressOf());
+        if(format) draw_text(wide(text),format.Get(),float(x),float(y-size),420,float(y+5),color(((c>>16)&255)/255.f,((c>>8)&255)/255.f,(c&255)/255.f));
+    }
+};
+
 void draw_command_popup() {
     if (!state.popup_open) return;
     auto& render = state.render;
@@ -2537,7 +2560,7 @@ void draw_command_popup() {
     constexpr float panel_left = kLogicalWidth + 28.0f;
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
     constexpr float panel_top = 44.0f;
-    constexpr float panel_bottom = 472.0f;
+    const float panel_bottom = state.popup_game ? 612.0f : 472.0f;
     const float elapsed = popup_elapsed_ms();
     auto eased = [](float value) {
         value = std::clamp(value, 0.0f, 1.0f);
@@ -2578,10 +2601,10 @@ void draw_command_popup() {
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
-    const std::wstring status = state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
+    const std::wstring status = state.popup_game ? (state.popup_game->focused ? L"GAME" : L"PAUSED") : state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
     draw_text(status, render.tiny_format.Get(), panel_left + 246, panel_top + 10,
               panel_left + 315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
-    draw_popup_button(L"COPY", PopupButton::copy,
+    if (!state.popup_game) draw_popup_button(L"COPY", PopupButton::copy,
                       panel_right - 142, panel_right - 92, panel_top + 6);
     if (elevated_command.empty() && state.popup_job) draw_popup_button(L"BG", PopupButton::background,
                       panel_right - 86, panel_right - 49, panel_top + 6);
@@ -2591,6 +2614,15 @@ void draw_command_popup() {
     render.d2d_context->DrawLine(D2D1::Point2F(panel_left + 10, panel_top + 39),
                                   D2D1::Point2F(panel_right - 10, panel_top + 39),
                                   render.brush.Get(), 1.0f);
+    if (state.popup_game) {
+        auto game_transform = D2D1::Matrix3x2F::Translation(0,-38) *
+            D2D1::Matrix3x2F::Scale(448.f/420,506.f/452) *
+            D2D1::Matrix3x2F::Translation(panel_left+12,94) *
+            D2D1::Matrix3x2F::Scale(1,unfold,D2D1::Point2F(0,panel_top)) * transform;
+        render.d2d_context->SetTransform(game_transform);
+        GamePainter painter; state.popup_game->draw(painter,true);
+        render.d2d_context->SetTransform(transform); render.d2d_context->PopAxisAlignedClip(); return;
+    }
     const std::wstring output = popup_output_text();
     const std::wstring displayed = output.empty() && state.popup_job ? L"STARTING COMMAND…" : output;
     ComPtr<IDWriteTextLayout> output_layout;
@@ -2672,11 +2704,12 @@ HRESULT render_frame() {
     render.d2d_context->Clear(color(0, 0, 0, 0));
     render.d2d_context->SetTransform(D2D1::Matrix3x2F::Translation(0, static_cast<float>(update_banner.offset())) *
                                      D2D1::Matrix3x2F::Scale(render.scale, render.scale));
-    draw_search();
-    draw_results();
+    if (state.popup_game) {
+        render.d2d_context->SetTransform(D2D1::Matrix3x2F::Translation(-kLogicalWidth,0)*D2D1::Matrix3x2F::Scale(render.scale,render.scale));
+    } else { draw_search(); draw_results(); }
     draw_command_popup();
     render.d2d_context->SetTransform(D2D1::Matrix3x2F::Scale(render.scale, render.scale));
-    if (update_banner.visible()) {
+    if (update_banner.visible() && !state.popup_game) {
         fill_round(15, 5, 635, 33, 6, color(0.04f, 0.22f, 0.12f, 0.98f));
         draw_text(std::wstring(L"Updated to v") + kKalwerVersion, render.title_format.Get(),
                   29, 9, 620, 31, color(0.68f, 0.94f, 0.76f));
@@ -2711,11 +2744,11 @@ HRESULT render_frame() {
         std::int32_t closing;
         float padding[2];
     } parameters{
-        static_cast<float>(state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
+        static_cast<float>(state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
         opening,
         kResultsY + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
-        state.results.empty() ? 0 : 1,
+        state.results.empty() || state.popup_game ? 0 : 1,
         state.closing ? 1 : 0,
         {0.0f, 0.0f},
     };
@@ -2748,7 +2781,7 @@ HRESULT position_and_resize() {
     information.cbSize = sizeof(information);
     GetMonitorInfoW(monitor, &information);
     const float scale = monitor_scale(monitor);
-    const int logical_width = state.popup_open ? kExpandedLogicalWidth : kLogicalWidth;
+    const int logical_width = state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth;
     const int width = static_cast<int>(std::lround(logical_width * scale));
     const int height = static_cast<int>(std::lround(kLogicalHeight * scale));
     const int launcher_width = static_cast<int>(std::lround(kLogicalWidth * scale));
@@ -2760,7 +2793,7 @@ HRESULT position_and_resize() {
         std::min(centered, work_right - width - 8));
     const int y = information.rcWork.top +
                   ((information.rcWork.bottom - information.rcWork.top) - height) / 3;
-    SetWindowPos(state.window, HWND_TOPMOST, x, y, width, height,
+    SetWindowPos(state.window, HWND_TOPMOST, state.popup_game ? work_right-width-8 : x, state.popup_game ? information.rcWork.top+8 : y, width, height,
                  SWP_NOOWNERZORDER | SWP_NOACTIVATE);
     if (state.render.pixel_width != static_cast<UINT>(width) ||
         state.render.pixel_height != static_cast<UINT>(height)) {
@@ -2858,6 +2891,16 @@ void cleanup_jobs() {
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (state.popup_closing && (message == WM_KEYDOWN || message == WM_CHAR || message == WM_PASTE)) return 0;
+    if (state.popup_game) {
+        if (message == WM_KEYDOWN) {
+            if (wparam == VK_ESCAPE) close_popup(false, false);
+            else {
+                int k=wparam==VK_LEFT?1:wparam==VK_RIGHT?2:wparam==VK_UP?3:wparam==VK_DOWN?4:wparam>='A' && wparam<='Z'?int(wparam-'A'+'a'):int(wparam);
+                state.popup_game->key(k); state.render_dirty=true;
+            }
+        }
+        if (message == WM_KEYDOWN || message == WM_CHAR || message == WM_PASTE) return 0;
+    }
     if (state.popup_open && state.popup_document) {
         if (message == WM_KEYDOWN) {
             if (wparam == VK_ESCAPE) close_popup(false, false);
@@ -3004,6 +3047,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         case WM_HOTKEY:
             if (wparam == kHotkeyId) {
+                if (state.popup_game) { SetForegroundWindow(state.window); return 0; }
                 if (HWND admin = FindWindowW(kWindowClass, kAdminWindowTitle)) {
                     PostMessageW(admin, kCloseAdminPopupMessage, 0, 0);
                     return 0;
@@ -3017,14 +3061,22 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (!elevated_command.empty() && state.popup_open) close_popup(false, true);
             return 0;
         case kToggleMessage:
+            if (state.popup_game) { SetForegroundWindow(state.window); return 0; }
             if (state.popup_open) close_popup(false, true);
             else if (state.visible) hide_launcher();
             else show_launcher();
             return 0;
         case WM_TIMER:
+            if (state.popup_game) {
+                auto now=std::chrono::steady_clock::now();
+                state.popup_game->tick(std::chrono::duration<double>(now-state.game_last).count());
+                state.game_last=now;
+                if (state.popup_game->focused) state.render_dirty=true;
+            }
             if (state.popup_closing && popup_elapsed_ms() <= 0) {
                 state.popup_open = false; state.popup_closing = false;
                 state.popup_job = nullptr; state.popup_document.reset();
+                if (state.popup_game) { state.popup_game.reset(); finish_hide_launcher(); position_and_resize(); return 0; }
                 position_and_resize(); hide_launcher();
             }
             if (update_ready && elevated_command.empty() && !state.visible && !state.popup_open &&
@@ -3083,13 +3135,24 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             move_selection(GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -1 : 1);
             return 0;
+        case WM_RBUTTONDOWN: {
+            if (state.popup_game && !state.popup_closing) {
+                state.popup_game->pointer((GET_X_LPARAM(lparam)/state.render.scale-40)*420/448.,38+(GET_Y_LPARAM(lparam)/state.render.scale-94)*452/506.,3);
+                state.render_dirty=true; return 0;
+            }
+            break;
+        }
         case WM_MOUSEMOVE: {
             if (!state.visible) break;
             const float scale = state.render.scale;
-            const float logical_x = GET_X_LPARAM(lparam) / scale;
-            const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
+            const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
             TrackMouseEvent(&tracking);
+            if (state.popup_game && !state.popup_closing) {
+                state.popup_game->pointer((logical_x-kLogicalWidth-40)*420/448.,38+(logical_y-94)*452/506.,0);
+                state.render_dirty=true;
+            }
             if (state.search_selecting) {
                 const DWORD index = search_text_index_at(logical_x, logical_y);
                 SendMessageW(state.edit, EM_SETSEL, state.search_selection_anchor, index);
@@ -3136,8 +3199,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         case WM_LBUTTONDOWN: {
             SetFocus(state.edit);
             const float scale = state.render.scale;
-            const float logical_x = GET_X_LPARAM(lparam) / scale;
-            const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
+            const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
+            if (state.popup_game && !state.popup_closing && logical_y>=94) {
+                state.popup_game->pointer((logical_x-kLogicalWidth-40)*420/448.,38+(logical_y-94)*452/506.,1);
+                state.render_dirty=true; return 0;
+            }
             if (state.popup_open) {
                 if (state.popup_job) state.popup_job->interacted = true;
                 state.popup_pressed = popup_button_at(logical_x, logical_y);
@@ -3195,8 +3262,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             if (state.popup_pressed != PopupButton::none) {
                 const float scale = state.render.scale;
-                const float logical_x = GET_X_LPARAM(lparam) / scale;
-                const float logical_y = GET_Y_LPARAM(lparam) / scale - update_banner.offset();
+                const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
+                const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
                 const PopupButton pressed = state.popup_pressed;
                 const PopupButton released = popup_button_at(logical_x, logical_y);
                 state.popup_pressed = PopupButton::none;
@@ -3223,6 +3290,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             break;
         case WM_ACTIVATE:
+            if (state.popup_game) {
+                state.popup_game->focused = LOWORD(wparam) != WA_INACTIVE && !state.popup_closing;
+                state.game_last=std::chrono::steady_clock::now(); state.render_dirty=true;
+            }
             if (LOWORD(wparam) != WA_INACTIVE) SetFocus(state.edit);
             if (LOWORD(wparam) == WA_INACTIVE && state.visible && !state.popup_open &&
                 !running_under_wine()) {
