@@ -212,7 +212,7 @@ public final class MainActivity extends Activity {
         });
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = text("KALWER · "+prefs.getLong("koins",0)+" koins", 12, GREEN);
+        TextView brand = text("KALWER", 12, GREEN);
         brand.setLetterSpacing(.16f);
         header.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
         header.addView(button("⚙", "Kalwer settings", this::settings), new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -518,7 +518,7 @@ public final class MainActivity extends Activity {
         box.addView(help);
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.addView(box);
-        dialog[0]=new AlertDialog.Builder(this).setTitle("Kalwer settings · "+prefs.getLong("koins",0)+" koins").setView(scroll).setPositiveButton("Done",(d,which)->{
+        dialog[0]=new AlertDialog.Builder(this).setTitle("Kalwer settings").setView(scroll).setPositiveButton("Done",(d,which)->{
             String value=query.getText().toString();buildUi();query.setText(value);refreshResults();if(Appearance.mode>0 || Appearance.popupMode>0)requestBackdrop();
         }).create();dialog[0].show();
         android.graphics.drawable.Drawable popupFill=new HalftoneDrawable(0xe600130b,GREEN,getResources().getDisplayMetrics().density,12,true);

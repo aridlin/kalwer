@@ -78,7 +78,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.7.0";
+constexpr wchar_t kKalwerVersion[] = L"0.8.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1707,14 +1707,14 @@ void activate_selection(bool elevated = false) {
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
-        if (name == "/snake" || name == "/minesweeper" || name == "/peggle") {
-            state.popup_game = std::make_unique<kalwer::games::Game>(name == "/snake" ? kalwer::games::Kind::snake : name == "/minesweeper" ? kalwer::games::Kind::minesweeper : kalwer::games::Kind::peggle);
+        if (kalwer::games::is_command(name)) {
+            state.popup_game = std::make_unique<kalwer::games::Game>(kalwer::games::command_kind(name));
             state.popup_game->focused = GetForegroundWindow() == state.window;
             state.game_last = std::chrono::steady_clock::now();
             state.opening = state.closing = false;
-            open_popup({name.substr(1), ""});
+            open_popup({kalwer::games::name(state.popup_game->kind), ""});
         }
-        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nSaved permanently on this device. Uses and upgrades are coming later."});
+        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") {bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored.":"No readable preset found."});}
         else if (name == "/config") {state.settings_mode=true;state.selection=0;state.render_dirty=true;}
@@ -2292,7 +2292,6 @@ void draw_search() {
     const wchar_t* help = state.settings_mode
         ? L"← → CHANGE   ENTER APPLY   ESC BACK"
         : L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
-    draw_text(std::to_wstring(kalwer::wallet.balance)+L" koins",render.tiny_format.Get(),530,15,620,30,color(.75f,.84f,.65f));
     draw_text(help, render.tiny_format.Get(), state.settings_mode ? 385.0f : 350.0f,
               58, 625, 72, color(0.46f, 0.67f, 0.52f));
 
@@ -2666,9 +2665,9 @@ void draw_command_popup() {
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
-    const std::wstring status = state.popup_game ? (state.popup_game->focused ? L"GAME" : L"PAUSED") : state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
+    const std::wstring status = state.popup_game ? std::to_wstring(kalwer::wallet.balance)+L" koins" : state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
     draw_text(status, render.tiny_format.Get(), panel_left + 246, panel_top + 10,
-              panel_left + 315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
+              state.popup_game?panel_right-50:panel_left+315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
     if (!state.popup_game) draw_popup_button(L"COPY", PopupButton::copy,
                       panel_right - 142, panel_right - 92, panel_top + 6);
     if (elevated_command.empty() && state.popup_job) draw_popup_button(L"BG", PopupButton::background,

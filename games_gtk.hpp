@@ -46,8 +46,8 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
             painter.quad(19,19,292,40*unfold,0x081a18,.84,0);
             if(!kalwer::appearance.popup_mode || kalwer::appearance.popup_keep_halftone)painter.quad(19,19,292,40*unfold,0x081a18,.4,3,19,19,292,40);
             auto first=painter.vertices.size();
-            painter.text(25,44,9,s->game.kind==Kind::peggle?"peggle":s->game.kind==Kind::snake?"snake":"minesweeper",0xe0f5e8);
-            painter.text(244,44,8,"GAME",0x8ce9b3);
+            painter.text(25,44,9,name(s->game.kind),0xe0f5e8);
+            painter.text(170,44,8,std::to_string(wallet.balance)+" koins",0xffd579);
             painter.quad(273,28,32,25,0x112e29,.9,0);
             painter.line(273,28,305,28,0x8ce9b3,1);painter.line(305,28,305,53,0x8ce9b3,1);painter.line(305,53,273,53,0x8ce9b3,1);painter.line(273,53,273,28,0x8ce9b3,1);
             painter.line(287,38,291,42,0xe0f5e8,1);painter.line(291,38,287,42,0xe0f5e8,1);
@@ -80,9 +80,9 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
         auto* widget=GTK_WIDGET(data);auto* s=static_cast<GtkGame*>(g_object_get_data(G_OBJECT(widget),"kalwer-game"));
         auto now=g_get_monotonic_time();
         if(s->game.focused && s->last){
-            int seconds=int(s->game.elapsed);auto head=s->game.snake.front();bool over=s->game.over;
+            int seconds=int(s->game.elapsed);auto head=s->game.snake.front();bool over=s->game.over;int ply=s->game.chess_game.position.ply;
             s->game.tick((now-s->last)/1000000.);
-            bool moving=s->game.kind==Kind::peggle || !(head==s->game.snake.front()) || seconds!=int(s->game.elapsed) || over!=s->game.over || (s->game.won && s->game.celebration<3);
+            bool moving=s->game.kind==Kind::peggle || (s->game.kind==Kind::garden && s->game.started && !s->game.over) || ply!=s->game.chess_game.position.ply || !(head==s->game.snake.front()) || seconds!=int(s->game.elapsed) || over!=s->game.over || (s->game.won && s->game.celebration<3);
             if(moving)gtk_gl_area_queue_render(GTK_GL_AREA(widget));
         }
         s->last=now;return G_SOURCE_CONTINUE;

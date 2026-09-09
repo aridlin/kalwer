@@ -38,11 +38,11 @@ struct Peggle {
     int guide_shots=0,catch_shots=0,layout=-1;
     bool flying=false,started=false,over=false,won=false,shot_guide=false,shot_catch=false;
     inline static constexpr std::array<int,3> free_scores{2500,7500,15000};
-    inline static constexpr std::array<const char*,4> names{"ORBIT","CASCADE","BLOOM","FORTRESS"};
+    inline static constexpr std::array<const char*,5> names{"ORBIT","CASCADE","BLOOM","FORTRESS","PRISM"};
 
-    void reset(std::mt19937& random) {
+    void reset(std::mt19937& random,bool prism=false) {
         preview_aim=999;
-        layout=layout<0 ? int(random()%4) : (layout+1)%4;
+        layout=prism?4:layout<0 ? int(random()%4) : (layout+1)%4;
         balls=10; score=shot_score=shot_hits=free_tier=orange_hit=0;
         clock=accumulator=flight=stuck=trail_clock=kick=bucket_flash=0;
         ballX=bucket=210; ballY=105; vx=vy=aim=cannon=0;
@@ -78,13 +78,20 @@ struct Peggle {
             }
             for(int i=0;i<8;++i) add(210+std::cos(i*pi/4)*24,275+std::sin(i*pi/4)*24);
             for(int i=0;i<24;++i) add(210+std::cos(i*pi/12)*160,275+std::sin(i*pi/12)*136);
-        } else {
+        } else if(layout==3) {
             for(int row=0;row<5;++row) for(int col=0;col<9;++col) {
                 double x=53+col*39+(row%2)*8;
                 double y=158+row*46+std::abs(col-4)*5;
                 add(x,y,(row+col)%2==0,(col-4)*.055);
             }
             for(int i=0;i<7;++i) add(100+i*36,396,false);
+        } else {
+            for(int ring=0;ring<3;ring++)for(int i=0;i<16;i++){
+                double a=i*pi/8+pi/8, radius=50+ring*47;
+                add(210+std::cos(a)*radius,275+std::sin(a)*radius*.82,ring==1 && i%2==0,a+pi/2);
+            }
+            for(int i=0;i<9;i++)add(54+i*39,154+std::abs(i-4)*9,i%2==0,(i<4?-.3:.3));
+            for(int i=0;i<8;i++)add(70+i*40,395,false);
         }
         std::vector<int> order;
         for(int i=0;i<int(pegs.size());++i) order.push_back(i);

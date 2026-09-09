@@ -1,6 +1,9 @@
 #pragma once
 #include "peggle.hpp"
 #include "appearance.hpp"
+#include "garden.hpp"
+#include "chess.hpp"
+#include "shop.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -11,7 +14,10 @@
 
 namespace kalwer::games {
 // All coordinates are in a 420 x 490 logical canvas. Hosts own focus and clocks.
-enum class Kind { snake, minesweeper, peggle };
+enum class Kind { snake, minesweeper, peggle, garden, chess, shop };
+inline const char* name(Kind kind){switch(kind){case Kind::snake:return "Snake";case Kind::minesweeper:return "Minesweeper";case Kind::peggle:return "Peggle";case Kind::garden:return "Garden Defense";case Kind::chess:return "Chess";case Kind::shop:return "Koin Shop";}return "Game";}
+inline bool is_command(const std::string& s){return s=="/snake" || s=="/minesweeper" || s=="/peggle" || s=="/pvz" || s=="/chess" || s=="/shop";}
+inline Kind command_kind(const std::string& s){return s=="/snake"?Kind::snake:s=="/minesweeper"?Kind::minesweeper:s=="/peggle"?Kind::peggle:s=="/pvz"?Kind::garden:s=="/chess"?Kind::chess:Kind::shop;}
 struct Cell { int x, y; bool operator==(const Cell&) const = default; };
 struct Game {
     Kind kind;
@@ -28,12 +34,18 @@ struct Game {
     std::array<bool,81> revealed{}, flagged{};
     int cursor = 40;
     Peggle arcade;
+    Garden garden;
+    Chess chess_game;
+    Shop shop;
+    bool wrap=false,aurora=false;
     explicit Game(Kind k, unsigned seed = std::random_device{}()) : kind(k), random(seed) { reset(); }
     void reset() {
         over = won = started = false; reward_claimed=false; reward=0; celebration=0; elapsed = accumulator = 0; score = 0;
         snake = {{8,8},{7,8},{6,8}}; direction = next = {1,0}; spawn_food();
         mines.fill(0); revealed.fill(false); flagged.fill(false); cursor = 40;
-        arcade.reset(random);
+        wrap=wallet.uses(0);aurora=wallet.uses(4);
+        arcade.reset(random,wallet.uses(3));garden.reset(random(),wallet.uses(1));chess_game.reset(chess_game.local,wallet.uses(2));
+        if(kind==Kind::shop)started=true;
     }
     void spawn_food() {
         std::vector<Cell> free;
@@ -66,10 +78,16 @@ struct Game {
         if(score==71) over=won=true;
     }
     void sync_arcade() { score=arcade.score; started=arcade.started; over=arcade.over; won=arcade.won; }
+    void sync_extra(){if(kind==Kind::garden){score=garden.kills*10;started=garden.started;over=garden.over;won=garden.won;}if(kind==Kind::chess){score=chess_game.position.ply;started=chess_game.started;over=chess_game.over;won=chess_game.won;}}
     void key(int key) { // arrows: 1 left, 2 right, 3 up, 4 down; other keys ASCII
         if(!focused) return;
+        if(kind==Kind::shop){shop.key(key);return;}
+        if(kind==Kind::chess && !chess_game.pending_promotion.empty()){chess_game.key(key);sync_extra();return;}
+        if(kind==Kind::chess && key=='h'){chess_game.local=!chess_game.local;reset();return;}
         if(key=='r' || key=='R') { reset(); return; }
         if(over) return;
+        if(kind==Kind::garden){garden.key(key);sync_extra();return;}
+        if(kind==Kind::chess){chess_game.key(key);sync_extra();return;}
         if(kind==Kind::snake) {
             Cell d=next;
             if(key==1 || key=='a') d={-1,0};
@@ -92,8 +110,11 @@ struct Game {
     }
     void pointer(double x, double y, int button) {
         if(!focused) return;
+        if(kind==Kind::shop){shop.pointer(x,y,button);return;}
         if(button==1 && y>=451 && x>=310) { reset(); return; }
         if(over) return;
+        if(kind==Kind::garden){garden.pointer(x,y,button);sync_extra();return;}
+        if(kind==Kind::chess){if(button==1 && y>=420 && y<445 && x<250 && chess_game.pending_promotion.empty()){chess_game.local=!chess_game.local;reset();return;}chess_game.pointer(x,y,button);sync_extra();return;}
         if(kind==Kind::minesweeper && x>=30 && x<390 && y>=80 && y<440) {
             cursor=int((y-80)/40)*9+int((x-30)/40);
             if(button==1) reveal(cursor);
@@ -105,11 +126,14 @@ struct Game {
         if(!focused || dt<=0) return;
         if(over && won) {
             if(!reward_claimed) {
-                int amount=kind==Kind::peggle?50+arcade.balls*5:kind==Kind::minesweeper?30:75;
+                int amount=kind==Kind::peggle?50+arcade.balls*5:kind==Kind::minesweeper?30:kind==Kind::garden?(garden.night?100:75):kind==Kind::chess?(chess_game.local?0:60):wrap?30:75;
+                if(amount==0)reward_claimed=true;
                 if(!kalwer::wallet.path.empty() && kalwer::wallet.credit(amount)) { reward_claimed=true; reward=amount; }
             }
             celebration+=std::min(dt,.05);
         }
+        if(kind==Kind::shop)return;
+        if(kind==Kind::garden || kind==Kind::chess){dt=std::min(dt,.05);if(started && !over)elapsed+=dt;if(kind==Kind::garden)garden.advance(dt);else chess_game.advance(dt);sync_extra();return;}
         if(kind==Kind::peggle) {
             dt=std::min(dt,0.05);
             if(started && !over) elapsed+=dt;
@@ -123,6 +147,7 @@ struct Game {
             if(accumulator<step) return;
             accumulator-=step; direction=next;
             Cell head{snake.front().x+direction.x,snake.front().y+direction.y};
+            if(wrap){head.x=(head.x+18)%18;head.y=(head.y+18)%18;}
             bool eating=head==food;
             auto end=eating?snake.end():std::prev(snake.end());
             if(head.x<0 || head.x>=18 || head.y<0 || head.y>=18 || std::find(snake.begin(),end,head)!=end) { over=true; return; }
@@ -136,10 +161,11 @@ struct Game {
         p.rect(0,38,420,40,0x0a211b);
         p.rect(0,447,420,43,0x0a211b);
         if(!embedded) { p.line(386,17,398,29,muted,2); p.line(398,17,386,29,muted,2); }
-        if(!embedded) p.text(24,29,22,kind==Kind::snake?"SNAKE":kind==Kind::minesweeper?"MINESWEEPER":"PEGGLE",text);
+        if(!embedded) p.text(24,29,22,name(kind),text);
+        if(kind==Kind::shop){shop.draw(p);return;}
         std::string status=kind==Kind::minesweeper?"Flags "+std::to_string(std::count(flagged.begin(),flagged.end(),true))+" / 10": "Score "+std::to_string(score);
         if(kind!=Kind::peggle) status+="   Time "+std::to_string(int(elapsed))+"s";
-        if(kind!=Kind::peggle) p.text(24,56,14,status,muted);
+        if(kind==Kind::snake || kind==Kind::minesweeper) p.text(24,56,14,status,muted);
         p.rect(30,80,360,360,panel);
         if(kind==Kind::snake) {
             for(auto c:snake) p.rect(31+c.x*20,81+c.y*20,18,18,c==snake.front()?text:green);
@@ -153,20 +179,22 @@ struct Game {
                 else if(flagged[i]) { p.line(x+14,y+10,x+14,y+31,text,2); p.line(x+15,y+11,x+28,y+16,orange,5); }
                 if(i==cursor) { p.line(x+3,y+3,x+37,y+3,green,2); p.line(x+3,y+3,x+3,y+37,green,2); p.line(x+37,y+3,x+37,y+37,green,2); p.line(x+3,y+37,x+37,y+37,green,2); }
             }
-        } else { arcade.draw(p); }
+        } else if(kind==Kind::peggle){arcade.draw(p);}
+        else if(kind==Kind::garden){garden.draw(p);}
+        else if(kind==Kind::chess){chess_game.draw(p);}
 
-        if(kind!=Kind::peggle) p.text(24,467,12,kind==Kind::snake?"Arrows / WASD   Space: start":kind==Kind::minesweeper?"Click: reveal   Right click / F: flag":"Mouse / arrows   Click / Space: fire",muted);
+        if(kind!=Kind::peggle) p.text(24,467,11,kind==Kind::snake?(wrap?"WRAP ARCADE - Arrows / WASD":"CLASSIC - Arrows / WASD"):kind==Kind::minesweeper?"Click: reveal   Right click / F: flag":kind==Kind::chess?"Click piece, then destination":"Arrows: bed   Enter: plant   1-5: seed",muted);
         p.rect(318,449,78,28,0x2b5145); p.text(325,467,12,kind==Kind::peggle?"New R":"Restart R",text);
         if(won && focused && celebration<2.5) {
             for(int i=0;i<24;++i) {
                 double t=celebration, a=i*2.39996;
-                p.circle(210+std::cos(a)*(30+t*55),248+std::sin(a)*(25+t*40)+t*t*18,1.5,i%2?green:orange);
+                p.circle(210+std::cos(a)*(30+t*55),248+std::sin(a)*(25+t*40)+t*t*18,1.5,aurora?(i%2?0xef9fe8:0x8bdcff):i%2?green:orange);
             }
         }
-        if(!focused || over || !started) {
+        if(!focused || over || (!started && kind!=Kind::chess)) {
             p.rect(51,230,318,64,0x0a211b);
             p.text(66,257,20,!focused?"PAUSED - focus to resume":over?(won?"YOU WIN!":"GAME OVER"):"Ready when you are",green);
-            p.text(66,281,12,over?(won && reward_claimed?"+"+std::to_string(reward)+" koins!  Wallet "+std::to_string(kalwer::wallet.balance):"Press R or click Restart"):kind==Kind::snake?"Press an arrow or Space to start":kind==Kind::minesweeper?"Reveal a square to start":"Orange: targets  Green: powers  Purple: bonus",text);
+            p.text(66,281,11,over?(won && reward_claimed && reward>0?"+"+std::to_string(reward)+" koins!  Wallet "+std::to_string(kalwer::wallet.balance):"Press R or click Restart"):kind==Kind::snake?"Press an arrow or Space to start":kind==Kind::minesweeper?"Reveal a square to start":kind==Kind::garden?"Plant a seed or press Space to begin":kind==Kind::chess?"Choose a piece and its destination":"Orange: targets  Green: powers  Purple: bonus",text);
         }
     }
 };

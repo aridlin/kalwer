@@ -74,11 +74,29 @@ inline std::string theme_css(std::string css) {
 struct Wallet {
     std::filesystem::path path;
     std::int64_t balance=0,wins=0;
-    void load() { std::ifstream in(path); std::int64_t b=0,w=0; if(in>>b>>w && b>=0 && b<1000000000000LL && w>=0) {balance=b;wins=w;} }
+    std::uint64_t owned=0,equipped=0;
+    void load() {
+        std::ifstream in(path); std::int64_t b=0,w=0;
+        if(in>>b>>w && b>=0 && b<1000000000000LL && w>=0) {
+            balance=b;wins=w;owned=equipped=0;
+            int version=0;std::uint64_t o=0,e=0;
+            if(in>>version>>o>>e && version==2){owned=o&31;equipped=e&owned;}
+        }
+    }
+    bool save(std::int64_t b,std::int64_t w,std::uint64_t o,std::uint64_t e) {
+        if(path.empty() || !atomic_text(path,std::to_string(b)+" "+std::to_string(w)+"\n2 "+std::to_string(o)+" "+std::to_string(e)+"\n"))return false;
+        balance=b;wins=w;owned=o;equipped=e;return true;
+    }
+    bool has(int id) const {return id>=0 && id<5 && (owned&(1ULL<<id));}
+    bool uses(int id) const {return has(id) && (equipped&(1ULL<<id));}
+    bool purchase(int id,int cost) {
+        if(id<0 || id>=5 || cost<=0 || has(id) || balance<cost)return false;
+        return save(balance-cost,wins,owned|(1ULL<<id),equipped|(1ULL<<id));
+    }
+    bool toggle(int id) {return has(id) && save(balance,wins,owned,equipped^(1ULL<<id));}
     bool credit(int amount) {
         if(amount<=0 || balance>999999999999LL-amount) return false;
-        if(!atomic_text(path,std::to_string(balance+amount)+" "+std::to_string(wins+1)+"\n")) return false;
-        balance+=amount; ++wins; return true;
+        return save(balance+amount,wins+1,owned,equipped);
     }
 };
 inline Wallet wallet;

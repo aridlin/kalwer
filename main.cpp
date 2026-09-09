@@ -53,7 +53,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.7.0";
+constexpr const char* kKalwerVersion = "0.8.0";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -777,7 +777,6 @@ void draw_search(cairo_t* cr) {
         draw_entry_contents(cr, query);
     }
 
-    draw_layout(cr, std::to_string(kalwer::wallet.balance)+" koins", 530, 17, "JetBrainsMono Nerd Font Bold 8", .75, .84, .65);
     draw_layout(cr, "KALWER", 67, 17, "JetBrainsMono Nerd Font Bold 7.5",
                 0.30, 0.68, 0.47);
     const bool completing = !state.completion_candidates.empty();
@@ -2595,12 +2594,13 @@ void activate_selection(bool elevated = false) {
     const Result result = state.results[state.selection];
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/snake" || name == "/minesweeper" || name == "/peggle") {
-            open_popup({name.substr(1), ""}, {}, name == "/snake" ? kalwer::games::Kind::snake : name == "/minesweeper" ? kalwer::games::Kind::minesweeper : kalwer::games::Kind::peggle);
+        if (kalwer::games::is_command(name)) {
+            auto kind=kalwer::games::command_kind(name);
+            open_popup({kalwer::games::name(kind), ""}, {}, kind);
             stop_query(); state.opening = state.closing = false;
             state.hidden_us = g_get_monotonic_time(); gtk_widget_hide(state.window);
         }
-        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nSaved permanently on this device. Uses and upgrades are coming later."});
+        else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") { bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored. Reopen Kalwer to see it.":"No readable preset found."}); }
         else if (name == "/config") show_settings_window();

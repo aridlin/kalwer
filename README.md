@@ -22,6 +22,7 @@ comes from the finished launcher below it.
 - Firefox Google search mode and a native precedence-aware calculator.
 - Warm resident process with three-second query and selection restoration.
 - GitHub release updates on Linux and Windows with a post-update banner.
+- Five native popup games, a permanent koin wallet, and optional minigame unlocks.
 
 ## Build and run
 
@@ -278,8 +279,8 @@ motion. All gameplay and effects pause when the popup is unfocused.
 
 Wins award **koins** once per round: Minesweeper 30, a fully cleared Snake board
 75, and Peggle 50 plus 5 per remaining ball. `/koins` shows the permanent device
-wallet and win count. The balance also appears on the launcher. Spending and
-upgrades are reserved for a later release. Resetting a game or loading a config
+wallet and win count. The balance appears in game and shop popup titles, never
+in the search bar. `/shop` spends koins on optional unlocks. Resetting a game or loading a config
 does not reset the wallet. Linux stores it in `$XDG_STATE_HOME/kalwer/koins-v1`
 (normally `~/.local/state/kalwer/koins-v1`); Windows stores it in Kalwer's local
 application data directory. No account or cross-device synchronization is used.
@@ -295,7 +296,7 @@ application data directory. No account or cross-device synchronization is used.
 `/config-save` writes the current appearance preset; `/config-load` restores it.
 These are editable `appearance.ini` and `preset.ini` files in Kalwer's config
 folder. Wallet data is deliberately separate from presets. Halftone transparency
-is applied to all three games without softening their text or game pieces.
+is applied to all five games without softening their text or game pieces.
 The game popup has a defined border and a dark, subtly dithered translucent title.
 
 Other dither modes process the actual **live underlying app windows** on
@@ -336,3 +337,53 @@ compute context retain transparency. Refresh it in settings; choosing
 Halftone needs no screen capture. Android settings can export/import a bounded
 JSON configuration through the system file picker. Android currently has no
 mini-games; its device wallet remains available for future features.
+
+
+## Garden Defense, chess and the koin shop (v0.8.0)
+
+`/pvz` opens **Garden Defense**, an original Plants vs. Zombies-style lane game
+with native vector graphics. Defend five lanes through four waves in Meadow:
+Sun plants produce collectible sun, Pea plants fire at approaching zombies,
+Walls absorb bites, Frost slows enemies, and Burst clears nearby lanes.
+Armored and fast zombies arrive in later waves. Each lane has one emergency
+mower. Sun is a round-local planting resource, separate from permanent koins.
+
+Select seeds with **1–5** or their cards, then click a bed to plant. Click suns
+or press **Space** to collect them all. Arrows/WASD select a bed and **Enter**
+plants there. **X** toggles the shovel; right-click also removes a plant.
+Seeds recharge, and a wave break grants 50 sun. Win Meadow for 75 koins;
+Moonlit Siege has stone beds, six waves and a 100-koin reward.
+
+`/chess` starts White versus a compact local computer opponent. Click a piece
+and a highlighted destination, or use arrows/WASD and Space/Enter. The game
+supports check, checkmate, stalemate, castling, en passant, all four promotions,
+automatic threefold/50-move draws, and common dead-material draws. Promotion
+uses the displayed choices or **Q/R/B/N**; R chooses a rook while that dialog
+is open. Otherwise **R** starts a new game. **H** (or the label below the board)
+starts a new game in computer/two-player mode. Beat the computer for 60 koins;
+local two-player games and draws do not award koins. The computer evaluates
+bounded branches across focused ticks and stops thinking while unfocused.
+
+`/shop` uses the same GPU popup and shows five permanent unlocks:
+
+| Unlock | Koins | Effect |
+| --- | ---: | --- |
+| Snake wraparound | 150 | Optional wrap rules; a full board earns 30 koins |
+| Moonlit Siege | 250 | Six-wave garden with stone planting beds |
+| Walnut chess board | 90 | Wood colors and ivory pieces |
+| Prism Peggle board | 200 | Extra peg arrangement and angled brick arcs |
+| Aurora celebrations | 120 | Pink/blue victory effects across the games |
+
+Click a card or select it with arrows and press Enter to buy. Purchased items
+are equipped immediately; selecting an owned item toggles it without spending
+again. Gameplay options apply to the next round. All base games and retries
+remain free. Purchases, ownership, equipped items and the remaining balance
+are committed together in the existing wallet file; old balances migrate on
+load. Appearance presets never include or reset purchases.
+
+Koins appear in game/shop popup title bars and `/koins`, not the launcher search
+bar. The outer padding remains clear, and backdrop capture/compute waits until
+opening animations settle. Games still use the existing animated output-popup
+medium without starting a shell, remain open when finished, and pause on focus
+loss. Android v0.3.1 removes the wallet from its launcher header and settings
+title; minigames and the shop remain desktop-only.
