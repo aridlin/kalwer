@@ -387,3 +387,11 @@ opening animations settle. Games still use the existing animated output-popup
 medium without starting a shell, remain open when finished, and pause on focus
 loss. Android v0.3.1 removes the wallet from its launcher header and settings
 title; minigames and the shop remain desktop-only.
+
+### Windows search and settings (v0.8.2)
+
+App matching and sorting run on a worker with coalesced requests; stale replies
+are discarded. Shell icons load on a separate worker, with only bitmap uploads
+and drawing on the UI thread. Updated result lists slide in over 160 ms.
+`/settings` and `/config` open a separate settings popup with checkboxes,
+dropdowns and numeric controls, keyboard navigation and automatic saving.
