@@ -1769,7 +1769,7 @@ void open_settings_popup() {
     RegisterClassW(&cls);
     POINT cursor{}; GetCursorPos(&cursor); MONITORINFO monitor{}; monitor.cbSize=sizeof(monitor);
     GetMonitorInfoW(MonitorFromPoint(cursor,MONITOR_DEFAULTTONEAREST),&monitor);
-    float scale=std::min(state.render.scale,(monitor.rcWork.bottom-monitor.rcWork.top-70)/610.f);
+    float scale=std::min({state.render.scale,(monitor.rcWork.bottom-monitor.rcWork.top-70)/610.f,(monitor.rcWork.right-monitor.rcWork.left-32)/610.f});
     scale=std::max(.75f,scale);
     auto px=[scale](int value){return static_cast<int>(value*scale);};
     RECT rect{0,0,px(610),px(590)};
@@ -3322,12 +3322,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     state.render_dirty = true;
                 }
             }
-            const int row = static_cast<int>((logical_y - kResultsY) / kRowPitch);
+            const int row = static_cast<int>((logical_y - kResultsY - result_slide()) / kRowPitch);
             if (!state.popup_open && logical_x >= kResultX &&
                 logical_x <= kResultX + kResultWidth && logical_y >= kResultsY &&
                 row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                    (logical_y - kResultsY - result_slide()) / kRowPitch + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
                 const bool valid = index >= 0 && index < static_cast<int>(state.results.size()) &&
@@ -3383,11 +3383,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 state.render_dirty = true;
                 return 0;
             }
-            const int row = static_cast<int>((logical_y - kResultsY) / kRowPitch);
+            const int row = static_cast<int>((logical_y - kResultsY - result_slide()) / kRowPitch);
             if (logical_x >= kResultX && logical_x <= kResultX + kResultWidth &&
                 logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY) / kRowPitch + state.scroll_visual;
+                    (logical_y - kResultsY - result_slide()) / kRowPitch + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
                 if (index >= 0 && index < static_cast<int>(state.results.size()) &&
