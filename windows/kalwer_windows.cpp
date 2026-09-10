@@ -2489,7 +2489,7 @@ void draw_results() {
         stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
                      1.0f, color(0.31f, 0.68f, 0.47f, 0.20f));
 
-        if (result.link.wstring().rfind(L"::", 0) != 0) {
+        if (!result.link.native().starts_with(L"::")) {
             if (ComPtr<ID2D1Bitmap1> icon = icon_for(result)) {
                 render.d2d_context->DrawBitmap(icon.Get(),
                     D2D1::RectF(kResultX + 12, y + 10, kResultX + 50, y + 48),
