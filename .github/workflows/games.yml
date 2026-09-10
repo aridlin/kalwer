@@ -24,15 +24,15 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - shell: cmd
         run: |
-          cl /nologo /std:c++20 /EHsc /W3 /utf-8 tests\windows_ui_test.cpp /Fe:windows-ui-test.exe /link d3d11.lib d3dcompiler.lib dxgi.lib dcomp.lib d2d1.lib dwrite.lib windowscodecs.lib dwmapi.lib shell32.lib shlwapi.lib shcore.lib ole32.lib user32.lib gdi32.lib advapi32.lib winhttp.lib bcrypt.lib
-          cl /nologo /std:c++20 /EHsc /W4 tests\latest_worker_test.cpp /Fe:latest-worker-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 tests\games_test.cpp /Fe:games-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 tests\peggle_test.cpp /Fe:peggle-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 tests\appearance_test.cpp /Fe:appearance-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 /O2 tests\chess_test.cpp /Fe:chess-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 /O2 tests\garden_test.cpp /Fe:garden-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 tests\shop_test.cpp /Fe:shop-test.exe
-          cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib
+          cl /nologo /std:c++20 /EHsc /W3 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN tests\windows_ui_test.cpp /Fe:windows-ui-test.exe /link d3d11.lib d3dcompiler.lib dxgi.lib dcomp.lib d2d1.lib dwrite.lib windowscodecs.lib dwmapi.lib shell32.lib shlwapi.lib shcore.lib ole32.lib user32.lib gdi32.lib advapi32.lib winhttp.lib bcrypt.lib || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\latest_worker_test.cpp /Fe:latest-worker-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\games_test.cpp /Fe:games-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\peggle_test.cpp /Fe:peggle-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\appearance_test.cpp /Fe:appearance-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /O2 tests\chess_test.cpp /Fe:chess-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /O2 tests\garden_test.cpp /Fe:garden-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\shop_test.cpp /Fe:shop-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib || exit /b 1
       - run: |
           .\windows-ui-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
