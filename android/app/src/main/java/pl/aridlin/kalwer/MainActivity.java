@@ -68,6 +68,19 @@ public final class MainActivity extends Activity {
     private String pendingSubmit;
     private int selected;
     private boolean capturing;
+    private GamePopup gamePopup;
+    private String rewardedCalculation="";
+    private static final int IMPORT_WAD=904;
+    private static final String[] GAME_COMMANDS={"/snake","/minesweeper","/peggle","/pvz","/chess","/shop","/tetris","/breakout","/kar","/koom","/games"};
+    private static final String[] GAME_NAMES={"Snake","Minesweeper","Peggle","Garden Defense","Chess","Koin Shop","Tetris","Breakout","Kar","Koom","Games"};
+    private void addPassive(int amount){long total=prefs.getLong("passive_koins",0);if(total<999999999999L-amount)prefs.edit().putLong("passive_koins",total+amount).apply();}
+    private void openGame(int kind,boolean unlock){
+        query.removeCallbacks(showIme);((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
+        root.setVisibility(View.INVISIBLE);
+        try{gamePopup=new GamePopup(this,kind,popupSnapshot,()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE),IMPORT_WAD),this::finish,unlock);gamePopup.show();}
+        catch(RuntimeException | LinkageError e){gamePopup=null;root.setVisibility(View.VISIBLE);Toast.makeText(this,"Could not open native games: "+e.getMessage(),Toast.LENGTH_LONG).show();}
+    }
+
     private android.graphics.Bitmap popupSnapshot;
     private static final int CAPTURE=901,EXPORT_CONFIG=902,IMPORT_CONFIG=903;
     private final BackdropCaptureService.Receiver backdropReceiver=image->{
@@ -78,7 +91,7 @@ public final class MainActivity extends Activity {
         showKeyboard();
     };
     private final Runnable showIme = () -> {
-        if (!capturing && !isFinishing() && query.hasWindowFocus()) {
+        if (gamePopup==null && !capturing && !isFinishing() && query.hasWindowFocus()) {
             ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(query, InputMethodManager.SHOW_IMPLICIT);
         }
     };
@@ -112,7 +125,7 @@ public final class MainActivity extends Activity {
         }
         buildUi();
         if (Build.VERSION.SDK_INT >= 33) {
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, this::finish);
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, ()->{if(gamePopup!=null)gamePopup.closeAnimated();else finish();});
         }
         String restored = state != null ? state.getString("query", "") : retainedQuery();
         query.setText(restored);
@@ -130,18 +143,21 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         loadApps();
+        if(gamePopup!=null)gamePopup.setResumed(true);
         showKeyboard();
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if(gamePopup!=null)return;
         query.setText(retainedQuery());
         query.setSelection(query.length());
         showKeyboard();
     }
 
     @Override protected void onPause() {
+        if(gamePopup!=null)gamePopup.setResumed(false);
         pendingSubmit = null;
         prefs.edit().putString("query", query.getText().toString())
                 .putLong("last_closed", System.currentTimeMillis()).apply();
@@ -176,7 +192,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showKeyboard() {
-        if(capturing)return;
+        if(capturing || gamePopup!=null)return;
         query.requestFocus();
         query.removeCallbacks(showIme);
         query.post(showIme);
@@ -322,13 +338,18 @@ public final class MainActivity extends Activity {
         String q = query.getText().toString().trim();
         if (q.equals("/settings") || q.equals("/config")) {
             results.add(new Result("Kalwer settings", "Transparency, query memory & controls", "⚙", this::settings, null));
+        } else if(q.startsWith("/")) {
+            if(q.equals("/unlockall"))results.add(new Result("Unlock games","","",()->openGame(10,true),null));
+            else if(q.equals("/doom"))results.add(new Result("Koom","Play","",()->openGame(9,false),null));
+            else if(q.equals("/koins"))results.add(new Result("Koin Shop","Balance, purchases and upgrades","",()->openGame(5,false),null));
+            else for(int i=0;i<GAME_COMMANDS.length;i++)if(GAME_COMMANDS[i].startsWith(q)){final int kind=i;results.add(new Result(GAME_NAMES[i],GAME_COMMANDS[i],"",()->openGame(kind,false),null));}
         } else if (q.startsWith("?")) {
             if (!SearchLogic.googleQuery(q).isEmpty()) addGoogle(q);
         } else if (q.startsWith(">")) {
             actions(q.substring(1).trim());
         } else {
             String answer = SearchLogic.calculate(q);
-            if (answer != null) results.add(new Result(answer, "Calculator · tap to copy", "=", () -> copy(answer), null));
+            if (answer != null) results.add(new Result(answer, "Calculator · tap to copy", "=", () -> {copy(answer);if(!q.equals(rewardedCalculation)){addPassive(1);rewardedCalculation=q;}}, null));
             if (catalogReady) {
                 SearchLogic.Query prepared = new SearchLogic.Query(q);
                 List<RankedApp> matches = new ArrayList<>();
@@ -366,7 +387,7 @@ public final class MainActivity extends Activity {
 
     private void submit() {
         String q = query.getText().toString().trim();
-        if (!catalogReady && !q.startsWith("?") && !q.startsWith(">") && !q.equals("/settings")
+        if (!catalogReady && !q.startsWith("?") && !q.startsWith(">") && !q.startsWith("/")
                 && SearchLogic.calculate(q) == null) {
             pendingSubmit = query.getText().toString();
             status.setText(R.string.apps_waiting);
@@ -383,7 +404,7 @@ public final class MainActivity extends Activity {
     }
 
     private void launch(Intent intent) {
-        try { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); finish(); }
+        try { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));if(Intent.ACTION_MAIN.equals(intent.getAction()))addPassive(2); finish(); }
         catch (ActivityNotFoundException | SecurityException e) {
             Toast.makeText(this, "No available app can open this action", Toast.LENGTH_LONG).show();
         }
@@ -545,6 +566,19 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
+        if(request==IMPORT_WAD){
+            if(result==RESULT_OK && data!=null && data.getData()!=null){Uri uri=data.getData();String display="import-"+System.currentTimeMillis()+".wad";
+                try(android.database.Cursor names=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){if(names!=null && names.moveToFirst()){String supplied=names.getString(0);if(supplied!=null && !supplied.isEmpty())display=new java.io.File(supplied).getName();}}catch(RuntimeException ignored){}
+                if(!display.toLowerCase(java.util.Locale.ROOT).endsWith(".wad"))display+=".wad";final String filename=display;
+                new Thread(()->{String message;java.io.File file=new java.io.File(getCacheDir(),filename);
+                    try(java.io.InputStream in=getContentResolver().openInputStream(uri);java.io.OutputStream out=new java.io.FileOutputStream(file)){
+                        if(in==null)throw new java.io.IOException();byte[] bytes=new byte[32768];int n;long total=0;
+                        while((n=in.read(bytes))!=-1){total+=n;if(total>512L*1024*1024)throw new java.io.IOException("WAD exceeds 512 MB");out.write(bytes,0,n);}out.flush();message=GameNative.importWad(file.getAbsolutePath());
+                    }catch(Exception e){message="Could not import WAD: "+e.getMessage();}finally{file.delete();}
+                    final String notice=message;runOnUiThread(()->{if(!isDestroyed())Toast.makeText(this,notice,Toast.LENGTH_LONG).show();});
+                },"kalwer-wad-import").start();
+            }return;
+        }
         if(request==CAPTURE){
             if(result!=RESULT_OK || data==null){capturing=false;showKeyboard();return;}
             getWindow().getDecorView().setAlpha(0);BackdropCaptureService.receiver=new java.lang.ref.WeakReference<>(backdropReceiver);
@@ -567,6 +601,7 @@ public final class MainActivity extends Activity {
         }catch(Exception e){Toast.makeText(this,"Could not read or write that config",Toast.LENGTH_LONG).show();}
     }
     @Override protected void onDestroy(){
+        if(gamePopup!=null){gamePopup.dismiss();gamePopup=null;}
         query.removeCallbacks(showIme);if(capturing){BackdropCaptureService.receiver.clear();stopService(new Intent(this,BackdropCaptureService.class));}super.onDestroy();
     }
 

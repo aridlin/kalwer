@@ -27,6 +27,7 @@ inline std::string filename(const std::filesystem::path& path){auto text=path.fi
 inline bool write_bundle_file(const std::filesystem::path& path,const void* data,size_t size) {std::ofstream out(path,std::ios::binary|std::ios::trunc);out.write(static_cast<const char*>(data),size);return bool(out);}
 
 inline std::function<bool(const std::filesystem::path&)> install_bundle;
+inline std::filesystem::path runtime_override;
 inline std::mutex preparation_mutex;
 struct Preparation {
     std::atomic<bool> ready{false};bool okay=false;
@@ -117,18 +118,30 @@ struct Session {
         CloseHandle(child.hThread);{std::lock_guard lock(mutex);process=child.hProcess;if(stop)TerminateProcess(process,0);}
         input=_fdopen(_open_osfhandle(reinterpret_cast<intptr_t>(write_in),_O_BINARY),"wb");output=_fdopen(_open_osfhandle(reinterpret_cast<intptr_t>(read_out),_O_BINARY),"rb");
 #else
-        auto executable=dir/"kalwer-koom";int to_child[2],from_child[2];
+        auto executable=runtime_override.empty()?dir/"kalwer-koom":runtime_override;int to_child[2],from_child[2];
         if(pipe(to_child)){fail("Could not open Koom pipes.");return;}
         if(pipe(from_child)){close(to_child[0]);close(to_child[1]);fail("Could not open Koom pipes.");return;}
+#ifndef __ANDROID__
         posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_adddup2(&actions,to_child[0],0);posix_spawn_file_actions_adddup2(&actions,from_child[1],1);
         posix_spawn_file_actions_addopen(&actions,2,(dir/"runtime.log").c_str(),O_WRONLY|O_CREAT|O_TRUNC,0600);
         for(int fd:{to_child[0],to_child[1],from_child[0],from_child[1]})posix_spawn_file_actions_addclose(&actions,fd);
+#endif
         std::vector<std::string> args{executable.string(),"-iwad",base.string(),"-config",config.string(),"-soundfont",(dir/"TimGM6mb.sf2").string()};
         if(kit)args.push_back("-kalwer-fieldkit");
         if(!wad.empty() && !is_base){args.push_back("-file");args.push_back(wad.string());}
         std::vector<char*> argv;for(auto& arg:args)argv.push_back(arg.data());argv.push_back(nullptr);
-        pid_t pid=0;int result=posix_spawn(&pid,executable.c_str(),&actions,nullptr,argv.data(),environ);posix_spawn_file_actions_destroy(&actions);close(to_child[0]);close(from_child[1]);
+        pid_t pid=0;int result=0;
+#ifdef __ANDROID__
+        // posix_spawn needs API 28; keep Android 8 support. All allocations
+        // happen before fork, and the child only uses async-signal-safe calls.
+        auto log_path=(dir/"runtime.log").string();pid=fork();
+        if(pid==0){dup2(to_child[0],0);dup2(from_child[1],1);int log=open(log_path.c_str(),O_WRONLY|O_CREAT|O_TRUNC,0600);if(log>=0){dup2(log,2);close(log);}for(int fd:{to_child[0],to_child[1],from_child[0],from_child[1]})close(fd);execve(executable.c_str(),argv.data(),environ);_exit(127);}
+        result=pid<0;
+#else
+        result=posix_spawn(&pid,executable.c_str(),&actions,nullptr,argv.data(),environ);posix_spawn_file_actions_destroy(&actions);
+#endif
+        close(to_child[0]);close(from_child[1]);
         if(result){close(to_child[1]);close(from_child[0]);fail("Could not start Koom.");return;}
         {std::lock_guard lock(mutex);process=pid;if(stop)kill(pid,SIGTERM);}
         input=fdopen(to_child[1],"wb");output=fdopen(from_child[0],"rb");

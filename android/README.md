@@ -8,6 +8,27 @@ and translucent panels alternate between more and less transparent areas in a
 halftone pattern; text and app icons stay crisp. The default Halftone mode needs no service or continuous animation loop.
 Optional snapshot capture uses a temporary foreground service.
 
+## Minigames
+
+`/games` opens the native corner popup: Snake, Minesweeper, Peggle, Garden Defense,
+Chess, Tetris, Breakout, Kar and Koom. `/shop` shows Koins and permanent upgrades;
+owned upgrades can be switched on or off for the next round. Locked games have a
+10-minute daily trial each. Gameplay, trials and audio pause when the popup loses
+focus or the app goes into the background. Closing the popup reverses its opening
+animation and returns to the previous app.
+
+Touch controls sit below the playfield. Tap Minesweeper cells to reveal and hold
+to flag; drag and release to aim/fire Peggle. Chess supports two players passing
+the phone. External keyboards use the desktop game bindings. Koom's WAD button
+imports a user-selected WAD; arrows select installed WADs and Base selects an IWAD.
+Kar artwork, Freedoom and its soundfont download and verify on first use, then work
+offline. Commercial Doom WADs remain user-provided.
+
+Ordinary successful app launches earn 2 Koins and copying a completed calculator
+result earns 1. This is local in-app progression, with no real-money purchases.
+Balances appear in game/shop popup titles. Popup appearance follows its separate
+settings and uses a captured backdrop when snapshot dithering is enabled.
+
 ## Performance
 
 App labels/package names are normalized once in a process-level catalog. A query
@@ -30,8 +51,8 @@ microbenchmark; handset launch latency and frame rate depend on the device.
 
 Install `app/build/outputs/apk/debug/app-debug.apk` on your phone. This is a
 debug-signed preview; Android may ask you to allow installation from the browser
-or file manager you use. It contains Java bytecode and supports ARM and x86 phones
-without separate architecture builds.
+or file manager you use. It includes native game code for 32-bit and 64-bit ARM and x86 devices.
+The games use OpenGL ES 3.0; the launcher itself keeps its native Android views.
 
 Assign **Kalwer** to your phone's side-button **Open app** action. Opening its
 normal app icon does the same thing. The hardware binding belongs to the phone's

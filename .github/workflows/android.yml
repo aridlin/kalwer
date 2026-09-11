@@ -1,9 +1,9 @@
 name: Android
 on:
   push:
-    paths: ['android/**', '.github/workflows/android.yml']
+    paths: ['android/**', '*.hpp', 'koom/**', 'vendor/doomgeneric/**', '.github/workflows/android.yml']
   pull_request:
-    paths: ['android/**', '.github/workflows/android.yml']
+    paths: ['android/**', '*.hpp', 'koom/**', 'vendor/doomgeneric/**', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v4
       - name: Install SDK components
-        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
       - name: Build and verify
         working-directory: android
         run: |

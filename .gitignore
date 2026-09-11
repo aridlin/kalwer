@@ -9,3 +9,4 @@
 /build-koom-windows/
 
 __pycache__/
+/android/app/.cxx/
