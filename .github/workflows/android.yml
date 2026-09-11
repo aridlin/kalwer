@@ -5,6 +5,9 @@ on:
   pull_request:
     paths: ['android/**', '*.hpp', 'koom/**', 'vendor/doomgeneric/**', '.github/workflows/android.yml']
   workflow_dispatch:
+concurrency:
+  group: android-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -31,7 +34,7 @@ jobs:
         run: |
           sudo chmod 666 /dev/kvm
           echo no | avdmanager create avd --force -n kalwer-ci -k 'system-images;android-35;default;x86_64'
-          "$ANDROID_HOME/emulator/emulator" -avd kalwer-ci -no-window -no-snapshot -no-audio -gpu swiftshader_indirect -memory 2048 -cores 2 > /tmp/kalwer-emulator.log 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd kalwer-ci -no-window -no-snapshot -no-audio -gpu swangle -memory 2048 -cores 2 > /tmp/kalwer-emulator.log 2>&1 &
           timeout 120 adb wait-for-device || { cat /tmp/kalwer-emulator.log; exit 1; }
           for i in $(seq 1 120); do
             if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi

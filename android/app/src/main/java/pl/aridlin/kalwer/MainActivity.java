@@ -75,7 +75,8 @@ public final class MainActivity extends Activity {
     private static final String[] GAME_NAMES={"Snake","Minesweeper","Peggle","Garden Defense","Chess","Koin Shop","Tetris","Breakout","Kar","Koom","Games"};
     private void addPassive(int amount){long total=prefs.getLong("passive_koins",0);if(total<999999999999L-amount)prefs.edit().putLong("passive_koins",total+amount).apply();}
     private void openGame(int kind,boolean unlock){
-        query.removeCallbacks(showIme);((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
+        if(gamePopup!=null)return;
+        query.clearFocus();query.removeCallbacks(showIme);((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
         root.setVisibility(View.INVISIBLE);
         try{gamePopup=new GamePopup(this,kind,popupSnapshot,()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE),IMPORT_WAD),this::finish,unlock);gamePopup.show();}
         catch(RuntimeException | LinkageError e){gamePopup=null;root.setVisibility(View.VISIBLE);Toast.makeText(this,"Could not open native games: "+e.getMessage(),Toast.LENGTH_LONG).show();}
@@ -386,6 +387,7 @@ public final class MainActivity extends Activity {
     }
 
     private void submit() {
+        if(gamePopup!=null)return;
         String q = query.getText().toString().trim();
         if (!catalogReady && !q.startsWith("?") && !q.startsWith(">") && !q.startsWith("/")
                 && SearchLogic.calculate(q) == null) {
@@ -557,7 +559,7 @@ public final class MainActivity extends Activity {
     }
     private void applyPalette(){TEXT=0xff000000|Appearance.TEXT[Appearance.theme];GREEN=0xff000000|Appearance.ACCENT[Appearance.theme];MUTED=Appearance.tint(0xff92b89f);}
     private void requestBackdrop(){
-        if((Appearance.mode==0 && Appearance.popupMode==0) || capturing)return;
+        if((Appearance.mode==0 && Appearance.popupMode==0) || capturing || gamePopup!=null)return;
         capturing=true;query.removeCallbacks(showIme);
         ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
         android.media.projection.MediaProjectionManager manager=getSystemService(android.media.projection.MediaProjectionManager.class);
