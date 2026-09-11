@@ -14,6 +14,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      ANDROID_AVD_HOME: ${{ runner.temp }}/kalwer-avd
+      ANDROID_USER_HOME: ${{ runner.temp }}/kalwer-android
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -33,7 +36,9 @@ jobs:
         timeout-minutes: 6
         run: |
           sudo chmod 666 /dev/kvm
-          echo no | avdmanager create avd --force -n kalwer-ci -k 'system-images;android-35;default;x86_64'
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          echo no | avdmanager create avd --force -n kalwer-ci -p "$ANDROID_AVD_HOME/kalwer-ci.avd" -k 'system-images;android-35;default;x86_64'
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx kalwer-ci
           "$ANDROID_HOME/emulator/emulator" -avd kalwer-ci -no-window -no-snapshot -no-audio -gpu swangle -memory 2048 -cores 2 > /tmp/kalwer-emulator.log 2>&1 &
           timeout 120 adb wait-for-device || { cat /tmp/kalwer-emulator.log; exit 1; }
           for i in $(seq 1 120); do
