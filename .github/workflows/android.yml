@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      ANDROID_AVD_HOME: ${{ runner.temp }}/kalwer-avd
-      ANDROID_USER_HOME: ${{ runner.temp }}/kalwer-android
+      ANDROID_AVD_HOME: /tmp/kalwer-avd
+      ANDROID_USER_HOME: /tmp/kalwer-android
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
