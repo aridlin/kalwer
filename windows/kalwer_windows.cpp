@@ -83,7 +83,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.9.0";
+constexpr wchar_t kKalwerVersion[] = L"0.9.1";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2802,7 +2802,7 @@ void draw_command_popup() {
     render.d2d_context->SetTransform(
         D2D1::Matrix3x2F::Scale(1.0f, unfold,
                               D2D1::Point2F(0.0f, panel_top)) * transform);
-    std::wstring title = state.popup_game ? wide(kalwer::games::name(state.popup_game->kind)) : state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
+    std::wstring title = state.popup_game ? wide(state.popup_game->title()) : state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));

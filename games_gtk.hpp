@@ -46,7 +46,7 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
             painter.quad(19,19,292,40*unfold,0x081a18,.84,0);
             if(!kalwer::appearance.popup_mode || kalwer::appearance.popup_keep_halftone)painter.quad(19,19,292,40*unfold,0x081a18,.4,3,19,19,292,40);
             auto first=painter.vertices.size();
-            painter.text(25,44,9,name(s->game.kind),0xe0f5e8);
+            painter.text(25,44,9,s->game.title(),0xe0f5e8);
             painter.text(170,44,8,std::to_string(wallet.balance)+" koins",0xffd579);
             painter.quad(273,28,32,25,0x112e29,.9,0);
             painter.line(273,28,305,28,0x8ce9b3,1);painter.line(305,28,305,53,0x8ce9b3,1);painter.line(305,53,273,53,0x8ce9b3,1);painter.line(273,53,273,28,0x8ce9b3,1);

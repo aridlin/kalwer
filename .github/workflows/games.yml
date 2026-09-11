@@ -1,9 +1,9 @@
 name: Native games
 on:
   push:
-    paths: ['kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
+    paths: ['game_trials.hpp', 'kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   pull_request:
-    paths: ['kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
+    paths: ['game_trials.hpp', 'kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          for test in games peggle appearance chess garden shop latest_worker expansion kar_physics kar; do
+          for test in games peggle appearance chess garden shop latest_worker expansion kar_physics kar game_trials; do
             g++ -std=c++20 -O1 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/${test}_test.cpp -o /tmp/${test}-test
             /tmp/${test}-test
           done
@@ -37,6 +37,7 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 /O2 tests\chess_test.cpp /Fe:chess-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 /O2 tests\garden_test.cpp /Fe:garden-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\shop_test.cpp /Fe:shop-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\game_trials_test.cpp /Fe:game-trials-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_test.cpp /Fe:kar-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_physics_test.cpp /Fe:kar-physics-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib || exit /b 1
@@ -56,6 +57,8 @@ jobs:
           .\garden-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\shop-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\game-trials-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\kar-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

@@ -444,3 +444,13 @@ percentage forms remain available.
 
 Mobile minigames follow completion of the desktop release; this desktop update
 does not add games to the existing Android app.
+
+
+### Daily game trials (v0.9.1)
+
+Each locked game—Tetris, Breakout, Kar and Koom—has its own free 10-minute
+allowance every local calendar day. Open it from `/games` or its command and
+press Enter/Space or click Play Trial. The popup title shows the time remaining.
+Only focused play uses time; loading, finished rounds and unfocused popups do
+not. Usage survives normal closes and restarts. When time runs out, the game
+pauses and its popup stays open. Permanent Koin purchases remove the limit.

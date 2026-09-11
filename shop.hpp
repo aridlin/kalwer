@@ -15,7 +15,7 @@ struct Shop {
         {"Koom","Permanent Doom-compatible Freedoom player",25000}
     }};
     int selected=0;
-    std::string message="Unlocks are permanent. Base games stay free.";
+    std::string message="Paid games: free 10-minute daily trials in /games.";
     void activate() {
         if(selected<0 || selected>=int(items.size()))return;
         const auto& item=items[selected];

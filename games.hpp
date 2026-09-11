@@ -8,6 +8,7 @@
 #include "breakout.hpp"
 #include "koom.hpp"
 #include "kar.hpp"
+#include "game_trials.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -46,7 +47,16 @@ struct Game {
     Shop shop;
     Tetris tetris; Breakout breakout; Kar kar; kalwer::koom::Game koom; int catalog_selection=0;
     bool wrap=false,aurora=false;
+    bool trial_active=false;
     explicit Game(Kind k, unsigned seed = std::random_device{}()) : kind(k), random(seed) { reset(); }
+    ~Game(){game_trials.flush();}
+    bool playable()const{return unlocked(kind) || (trial_active && game_trials.remaining(unlock_id(kind)-5)>0 && !game_trials.save_failed);}
+    std::string title()const{return std::string(name(kind))+(!unlocked(kind) && trial_active?"  "+game_trials.label(unlock_id(kind)-5)+" trial":"");}
+    bool trial_running()const {
+        if(unlocked(kind) || !trial_active)return false;
+        if(kind==Kind::koom){if(!koom.session)return false;std::lock_guard lock(koom.session->mutex);return koom.session->sequence>0 && koom.session->error.empty();}
+        return started && !over;
+    }
     void reset() {
         over = won = started = false; reward_claimed=false; reward=0; celebration=0; elapsed = accumulator = 0; score = 0;
         snake = {{8,8},{7,8},{6,8}}; direction = next = {1,0}; spawn_food();
@@ -89,7 +99,7 @@ struct Game {
     void sync_arcade() { score=arcade.score; started=arcade.started; over=arcade.over; won=arcade.won; }
     void sync_new(){if(kind==Kind::kar){score=kar.score;started=kar.started;over=kar.over;won=kar.won;}if(kind==Kind::tetris){score=tetris.score;started=tetris.started;over=tetris.over;won=tetris.won;}if(kind==Kind::breakout){score=breakout.score;started=breakout.started;over=breakout.over;won=breakout.won;}}
     void sync_extra(){if(kind==Kind::garden){score=garden.kills*10;started=garden.started;over=garden.over;won=garden.won;}if(kind==Kind::chess){score=chess_game.position.ply;started=chess_game.started;over=chess_game.over;won=chess_game.won;}}
-    void focus(bool active){focused=active;koom.focus(active && kind==Kind::koom);kar.focus(active);}
+    void focus(bool active){focused=active;if(!active)game_trials.flush();koom.focus(active && kind==Kind::koom && playable());kar.focus(active);}
     void release(int key){if(kind==Kind::koom)koom.key(key,false);if(kind==Kind::kar)kar.key(key,false);}
     void key(int key) { // arrows: 1 left, 2 right, 3 up, 4 down; other keys ASCII
         if(!focused) return;
@@ -98,7 +108,10 @@ struct Game {
             if(key==4 || key=='s')catalog_selection=(catalog_selection+1)%9;
             if(key==13 || key==' '){kind=catalog_games[catalog_selection];reset();}return;
         }
-        if(!unlocked(kind))return;
+        if(!playable()){
+            if((key==13 || key==' ') && game_trials.begin(unlock_id(kind)-5))trial_active=true;
+            else return;
+        }
         if(kind==Kind::shop){shop.key(key);return;}
         if(kind==Kind::chess && !chess_game.pending_promotion.empty()){chess_game.key(key);sync_extra();return;}
         if(kind==Kind::chess && key=='h'){chess_game.local=!chess_game.local;reset();return;}
@@ -133,7 +146,7 @@ struct Game {
     void pointer(double x, double y, int button) {
         if(!focused) return;
         if(kind==Kind::catalog){if(button==1 && x>=24 && x<396 && y>=55 && y<433){catalog_selection=int((y-55)/42);kind=catalog_games[catalog_selection];reset();}return;}
-        if(!unlocked(kind))return;
+        if(!playable()){if(button==1 && y>=270 && y<315 && x>=35 && x<385)key(13);return;}
         if(kind==Kind::shop){shop.pointer(x,y,button);return;}
         if(button==1 && y>=451 && x>=310) { reset(); return; }
         if(kind==Kind::breakout){breakout.pointer(x,y,button);sync_new();return;}
@@ -148,8 +161,12 @@ struct Game {
         if(kind==Kind::peggle) { arcade.pointer(x,y,button); sync_arcade(); }
     }
     void tick(double dt) {
-        if(kind==Kind::koom){koom.focus(focused && unlocked(kind));return;}
-        if(!focused || dt<=0 || !unlocked(kind)) return;
+        if(focused && trial_running() && dt>0){
+            dt=game_trials.consume(unlock_id(kind)-5,std::min(dt,1.));
+            if(game_trials.remaining(unlock_id(kind)-5)<=0){trial_active=false;kar.focus(false);}
+        }
+        if(kind==Kind::koom){koom.focus(focused && playable());return;}
+        if(!focused || dt<=0 || !playable()) return;
         if((kind==Kind::tetris || kind==Kind::breakout) && over && !reward_claimed){int amount=kind==Kind::tetris?std::min(250,tetris.lines*4+tetris.score/200):std::min(250,breakout.score/30+(won?80:0));if(amount==0)reward_claimed=true;else if(wallet.credit(amount,won)){reward_claimed=true;reward=amount;}}
         if(over && won) {
             if(!reward_claimed && kind!=Kind::tetris && kind!=Kind::breakout) {
@@ -191,8 +208,18 @@ struct Game {
         p.rect(0,447,420,43,0x0a211b);
         if(!embedded) { p.line(386,17,398,29,muted,2); p.line(398,17,386,29,muted,2); }
         if(!embedded) p.text(24,29,22,name(kind),text);
-        if(kind==Kind::catalog){for(int i=0;i<9;i++){auto k=catalog_games[i];double y=55+i*42;p.rect(24,y,372,38,i==catalog_selection?0x2b5145:0x112e29);p.text(34,y+25,16,name(k),text);p.text(225,y+25,12,unlocked(k)?"PLAY":"/shop: "+std::to_string(Shop::items[unlock_id(k)].cost)+" koins",unlocked(k)?green:orange);}p.text(24,465,11,"Arrows + Enter or click a game",muted);return;}
-        if(!unlocked(kind)){p.text(35,190,25,std::string(name(kind))+" is locked",green);p.text(35,228,16,std::to_string(Shop::items[unlock_id(kind)].cost)+" koins in /shop",orange);p.text(35,264,12,"Buy once with koins earned inside Kalwer.",text);return;}
+        if(kind==Kind::catalog){for(int i=0;i<9;i++){auto k=catalog_games[i];double y=55+i*42;p.rect(24,y,372,38,i==catalog_selection?0x2b5145:0x112e29);p.text(34,y+25,16,name(k),text);p.text(225,y+25,12,unlocked(k)?"PLAY":"TRIAL "+game_trials.label(unlock_id(k)-5)+" / day",unlocked(k)?green:orange);}p.text(24,465,11,"Arrows + Enter or click a game",muted);return;}
+        if(!playable()){
+            int id=unlock_id(kind)-5;bool available=game_trials.remaining(id)>0;
+            p.text(35,150,25,name(kind),green);
+            p.text(35,190,17,available?"Daily trial: "+game_trials.label(id)+" remaining":"Today's trial is finished",orange);
+            p.text(35,225,12,"10 minutes per game, every day. Pauses unfocused.",text);
+            p.text(35,250,12,std::to_string(Shop::items[unlock_id(kind)].cost)+" koins in /shop for unlimited play",muted);
+            if(available){p.rect(35,270,350,45,panel);p.text(55,298,15,"ENTER / SPACE / CLICK: PLAY TRIAL",green);}
+            else p.text(35,298,14,"More trial time tomorrow. This popup stays open.",green);
+            if(game_trials.save_failed)p.text(35,337,12,"Could not save trial time. Press Enter to retry.",orange);
+            return;
+        }
         if(kind==Kind::koom){koom.draw(p);return;}
         if(kind==Kind::kar){
             kar.draw(p);
