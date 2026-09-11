@@ -1553,6 +1553,10 @@ std::unique_ptr<CommandJob> create_command_job(const std::wstring& command) {
         L"\" /d /q /c " + shell_command;
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
+    // Explicit null standard handles let ConPTY establish its own streams.
+    // Otherwise Windows can duplicate a parent's redirected console handles
+    // even with bInheritHandles=FALSE (for example when launched from a shell).
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
     const BOOL created = CreateProcessW(nullptr, command_line.data(), nullptr, nullptr,

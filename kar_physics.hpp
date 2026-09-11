@@ -14,10 +14,11 @@ struct Vehicle {
     std::array<int,7> gears;
     std::array<int,7> gear_ms;
 };
-inline constexpr std::array<Vehicle,3> vehicles{{
+inline constexpr std::array<Vehicle,4> vehicles{{
     {313,65,50,34,{0,70,100,150,190,230,313},{0,1000,2000,2100,2400,2700,3000}},
     {322,75,45,27,{0,70,100,150,190,250,322},{0,1200,2300,3100,3300,3500,3600}},
-    {326,70,35,30,{0,70,100,140,180,245,326},{0,2000,2300,3400,3700,4000,4300}}
+    {326,70,35,30,{0,70,100,140,180,245,326},{0,2000,2300,3400,3700,4000,4300}},
+    {260,70,50,26,{0,70,100,140,180,220,260},{0,1300,2500,2800,3100,3400,3700}}
 }};
 struct Motion {
     int vehicle=0,speed=0,gear=1,nitro=25*unit,stage=0,boost_left=0,drain_per_ms=0;
@@ -47,7 +48,7 @@ struct Motion {
         while(gear<6 && speed>=from_kph(car.gears[gear]))++gear;
         while(gear>1 && speed<from_kph(car.gears[gear-1]))--gear;
         constexpr int extra[]={0,10,20,30,50};
-        int target=braking?0:from_kph(car.maximum)*(100+extra[stage])/100;
+        int target=braking?0:from_kph(car.gears[gear])+from_kph(car.maximum)*extra[stage]/100;
         target=target*(100-std::clamp(surface_loss,0,100))/100;
         int rise=from_kph(car.gears[gear])-from_kph(car.gears[gear-1]);
         constexpr int acceleration_bonus[]={0,30,50,80,250};
