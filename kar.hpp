@@ -30,6 +30,7 @@ struct Kar {
     int vehicle=3,score=0,position=8,heat=0,knockdowns=0,arrests=0,drift_points=0;
     double elapsed=0,accumulator=0,phase_time=0,notice_time=0,heat_time=0,police_time=0,invulnerable=0,roadblock_time=0;
     int jump_height=0,jump_velocity=0;
+    bool nitro_reserve=false,quick_recovery=false;
     bool started=false,over=false,won=false,police_active=false;
     std::string notice;
     std::shared_ptr<kar_pixels::ArtRequest> artwork;
@@ -41,7 +42,7 @@ struct Kar {
         r.segment=distance/1024;r.offset=distance%1024;r.lateral=lateral;
     }
     void reset(unsigned seed){
-        random.seed(seed);held.fill(false);picked.fill(-1);motion.reset(vehicle);steering.reset();impact={};
+        random.seed(seed);held.fill(false);picked.fill(-1);motion.reset(vehicle);if(nitro_reserve)motion.refill(50);steering.reset();impact={};
         road={segments-4,0,0,185};previous=road;phase=Phase::ready;
         score=0;position=8;heat=knockdowns=arrests=drift_points=0;
         elapsed=accumulator=phase_time=notice_time=heat_time=police_time=invulnerable=0;
@@ -62,7 +63,7 @@ struct Kar {
         if(key<0 || key>=256)return;
         bool pressed=down && !held[key];held[key]=down;if(!pressed || over)return;
         if(phase==Phase::ready){
-            if(key=='c'){vehicle=(vehicle+1)%4;motion.reset(vehicle);for(int i=0;i<7;++i)racers[i].motion.reset(vehicle);return;}
+            if(key=='c'){vehicle=(vehicle+1)%4;motion.reset(vehicle);if(nitro_reserve)motion.refill(50);for(int i=0;i<7;++i)racers[i].motion.reset(vehicle);return;}
             if(key==13 || key==' '){started=true;phase=Phase::countdown;phase_time=3;return;}
         }
         if(phase!=Phase::racing)return;
@@ -83,7 +84,7 @@ struct Kar {
     void hit(Impact::Hit type,int speed){
         if(invulnerable>0 || impact.cooldown>0)return;
         impact.apply(type,speed,motion,steering);
-        if(impact.wrecked){phase=Phase::wreck;phase_time=2;jump_height=1;jump_velocity=impact.vertical_speed;say("CRASH!",2);}
+        if(impact.wrecked){phase=Phase::wreck;phase_time=quick_recovery?1:2;jump_height=1;jump_velocity=impact.vertical_speed;say("CRASH!",2);}
         else say("CONTACT",.5);
         heat=std::min(100,heat+10);heat_time=0;
     }

@@ -63,6 +63,10 @@ struct Game {
         mines.fill(0); revealed.fill(false); flagged.fill(false); cursor = 40;
         wrap=wallet.uses(0);aurora=wallet.uses(4);
         arcade.reset(random,wallet.uses(3));garden.reset(random(),wallet.uses(1));chess_game.reset(chess_game.local,wallet.uses(2));
+        tetris.hold_enabled=wallet.uses(9);tetris.slow_gravity=wallet.uses(10);
+        breakout.wide=wallet.uses(11);breakout.spare=wallet.uses(12);
+        kar.nitro_reserve=wallet.uses(13);kar.quick_recovery=wallet.uses(14);
+        koom.field_kit=wallet.uses(15);koom.bounty=wallet.uses(16);
         tetris.reset(random());breakout.reset(random());kar.reset(random());if(kind==Kind::kar && !wallet.path.empty())kar.load_art(wallet.path.parent_path()/"kar"/"art.karp");if(kind==Kind::koom)koom.reset();
         if(kind==Kind::shop || kind==Kind::catalog)started=true;
     }

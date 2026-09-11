@@ -26,13 +26,24 @@ int main(int argc,char** argv){
     _setmode(framefd,_O_BINARY);_setmode(0,_O_BINARY);
 #endif
     FILE* frames=fdopen(framefd,"wb");setvbuf(frames,NULL,_IONBF,0);
-    const char* font="TimGM6mb.sf2";int audio=1;
-    for(int i=1;i<argc;i++){if(!strcmp(argv[i],"-soundfont") && i+1<argc)font=argv[++i];else if(!strcmp(argv[i],"-nosound"))audio=0;}
+    const char* font="TimGM6mb.sf2";int audio=1,fieldkit=0;
+    for(int i=1;i<argc;i++){if(!strcmp(argv[i],"-soundfont") && i+1<argc)font=argv[++i];else if(!strcmp(argv[i],"-nosound"))audio=0;else if(!strcmp(argv[i],"-kalwer-fieldkit"))fieldkit=1;}
     KoomAudioInit(font,audio);
     doomgeneric_Create(argc,argv);
-    uint32_t completed_maps=0;int intermission=0;
+    uint32_t completed_maps=0;int intermission=0,kit_map=-1,kit_episode=-1,previous_leveltime=-1;
     while(fread(keys,1,sizeof(keys),stdin)==sizeof(keys)) {
         ticks+=29;doomgeneric_Tick();KoomAudioFrame(29);
+        if(fieldkit && gamestate==GS_LEVEL && players[consoleplayer].mo && !demoplayback){
+            if(kit_map!=gamemap || kit_episode!=gameepisode || leveltime<previous_leveltime){
+                player_t* player=&players[consoleplayer];
+                if(player->health<150)player->health=150;
+                player->mo->health=player->health;
+                if(player->armorpoints<150){player->armorpoints=150;player->armortype=2;}
+                kit_map=gamemap;kit_episode=gameepisode;
+                fprintf(stderr,"Kalwer field kit: health %d, armor %d, map %d:%d\n",player->health,player->armorpoints,gameepisode,gamemap);
+            }
+            previous_leveltime=leveltime;
+        }
         if(gamestate==GS_INTERMISSION && !intermission)++completed_maps;
         intermission=gamestate==GS_INTERMISSION;
         uint32_t header[4]={0x4b4f4f4d,DOOMGENERIC_RESX,DOOMGENERIC_RESY,completed_maps};
