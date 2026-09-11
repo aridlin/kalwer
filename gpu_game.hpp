@@ -1,6 +1,10 @@
 #pragma once
+#ifdef __ANDROID__
+#include <GLES3/gl3.h>
+#else
 #include <epoxy/gl.h>
 #include <cairo.h>
+#endif
 #include <vector>
 #include <array>
 #include <cmath>
@@ -15,14 +19,18 @@ struct GpuPainter {
     int frame_width=0,frame_height=0;
     float logical_width=420,logical_height=452,origin_y=38;
     static GLuint shader(GLenum type,const char* source) {GLuint s=glCreateShader(type);glShaderSource(s,1,&source,nullptr);glCompileShader(s);return s;}
-    bool init() {
-        const char* vs=R"(#version 330 core
-layout(location=0) in vec2 pos;layout(location=1) in vec2 tex;layout(location=2) in vec4 tint;layout(location=3) in float shape;
+    bool init(const void* glyph_pixels=nullptr,const float* glyph_advances=nullptr) {
+#ifdef __ANDROID__
+        constexpr const char* version="#version 300 es\nprecision highp float;\nprecision highp int;\n";
+#else
+        constexpr const char* version="#version 330 core\n";
+        (void)glyph_pixels;(void)glyph_advances;
+#endif
+        const std::string vs=std::string(version)+R"(layout(location=0) in vec2 pos;layout(location=1) in vec2 tex;layout(location=2) in vec4 tint;layout(location=3) in float shape;
 out vec2 uv;out vec4 rgba;flat out int kind;
 uniform vec2 logicalSize;uniform float originY;
 void main(){gl_Position=vec4(pos.x*2./logicalSize.x-1.,1.-(pos.y-originY)*2./logicalSize.y,0,1);uv=tex;rgba=tint;kind=int(shape);})";
-        const char* fs=R"(#version 330 core
-in vec2 uv;in vec4 rgba;flat in int kind;out vec4 color;
+        std::string fs=std::string(version)+R"(in vec2 uv;in vec4 rgba;flat in int kind;out vec4 color;
 uniform sampler2D glyphs;uniform sampler2D frame;uniform sampler2D backdrop;uniform vec2 backdropSize;uniform vec3 dark;
 void main(){float a=rgba.a;vec3 rgb=rgba.rgb;
 if(kind==1){float d=length(uv);a*=1.-smoothstep(1.-fwidth(d),1.,d);}
@@ -31,15 +39,25 @@ if(kind==3){vec2 p=uv/7.;p.x-=mod(floor(p.y),2.)*.5;float d=length(fract(p)-.5);
 if(kind==4){vec2 p=uv*backdropSize;vec3 value=texture(backdrop,(floor(p)+.5)/backdropSize).rgb;float d=length(fract(p)-.5);float dot=1.-smoothstep(.36,.49,d);rgb=mix(dark,mix(dark,value,.5),dot);}
 if(kind==5){color=vec4(texture(frame,uv).rgb,1);return;}
 color=vec4(rgb*a,a);})";
-        GLuint v=shader(GL_VERTEX_SHADER,vs),f=shader(GL_FRAGMENT_SHADER,fs);program=glCreateProgram();glAttachShader(program,v);glAttachShader(program,f);glLinkProgram(program);glDeleteShader(v);glDeleteShader(f);
+#ifdef __ANDROID__
+        const auto swap=fs.find("texture(frame,uv).rgb");
+        if(swap!=std::string::npos)fs.replace(swap,std::string("texture(frame,uv).rgb").size(),"texture(frame,uv).bgr");
+#endif
+        GLuint v=shader(GL_VERTEX_SHADER,vs.c_str()),f=shader(GL_FRAGMENT_SHADER,fs.c_str());program=glCreateProgram();glAttachShader(program,v);glAttachShader(program,f);glLinkProgram(program);glDeleteShader(v);glDeleteShader(f);
         GLint ok=0;glGetProgramiv(program,GL_LINK_STATUS,&ok);if(!ok)return false;
         glGenVertexArrays(1,&vao);glBindVertexArray(vao);glGenBuffers(1,&vbo);glBindBuffer(GL_ARRAY_BUFFER,vbo);
         for(int i=0;i<4;i++){glEnableVertexAttribArray(i);glVertexAttribPointer(i,i==2?4:i==3?1:2,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(size_t(i==0?0:i==1?2:i==2?4:8)*sizeof(float)));}
         glGenTextures(1,&atlas);glBindTexture(GL_TEXTURE_2D,atlas);
+#ifdef __ANDROID__
+        if(!glyph_pixels || !glyph_advances)return false;
+        std::copy(glyph_advances,glyph_advances+96,advances.begin());
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,512,256,0,GL_RGBA,GL_UNSIGNED_BYTE,glyph_pixels);
+#else
         auto* surface=cairo_image_surface_create(CAIRO_FORMAT_ARGB32,512,256);auto* cr=cairo_create(surface);
         cairo_select_font_face(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);cairo_set_font_size(cr,24);cairo_set_source_rgba(cr,1,1,1,1);
         for(int i=0;i<96;i++){char text[2]={char(i+32),0};cairo_text_extents_t ext;cairo_text_extents(cr,text,&ext);advances[i]=ext.x_advance;cairo_move_to(cr,(i%16)*32+2,(i/16)*40+29);cairo_show_text(cr,text);}
         cairo_destroy(cr);cairo_surface_flush(surface);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,512,256,0,GL_BGRA,GL_UNSIGNED_BYTE,cairo_image_surface_get_data(surface));cairo_surface_destroy(surface);
+#endif
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
         return true;
     }
@@ -70,13 +88,18 @@ color=vec4(rgb*a,a);})";
         double s=size/24.;for(unsigned char ch:text){if(ch<32 || ch>127)continue;int i=ch-32;quad(x-2*s,y-29*s,32*s,40*s,c,1,2,(i%16)*32/512.f,(i/16)*40/256.f,32/512.f,40/256.f);x+=advances[i]*s;}
     }
     void image(double x,double y,double w,double h,const uint32_t* pixels,int width,int height){
+#ifdef __ANDROID__
+        constexpr GLenum pixel_format=GL_RGBA;
+#else
+        constexpr GLenum pixel_format=GL_BGRA;
+#endif
         if(!frame)glGenTextures(1,&frame);
         glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,frame);
         if(frame_width!=width || frame_height!=height){
-            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,pixel_format,GL_UNSIGNED_BYTE,pixels);
             glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
             frame_width=width;frame_height=height;
-        }else glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
+        }else glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,pixel_format,GL_UNSIGNED_BYTE,pixels);
         quad(x,y,w,h,0xffffff,1,5);
     }
     void flush(){

@@ -77,18 +77,21 @@ struct Wallet {
     std::filesystem::path path;
     std::int64_t balance=0,wins=0;
     std::uint64_t owned=0,equipped=0;
+    std::int64_t passive_claimed=0;
     void load() {
         std::ifstream in(path); std::int64_t b=0,w=0;
         if(in>>b>>w && b>=0 && b<1000000000000LL && w>=0) {
-            balance=b;wins=w;owned=equipped=0;
+            balance=b;wins=w;owned=equipped=0;passive_claimed=0;
             int version=0;std::uint64_t o=0,e=0;
-            if(in>>version>>o>>e && version==2){owned=o&item_mask;equipped=e&owned;}
+            if(in>>version>>o>>e && version==2){owned=o&item_mask;equipped=e&owned;std::int64_t claimed=0;if(in>>claimed && claimed>=0 && claimed<1000000000000LL)passive_claimed=claimed;}
         }
     }
-    bool save(std::int64_t b,std::int64_t w,std::uint64_t o,std::uint64_t e) {
-        if(path.empty() || !atomic_text(path,std::to_string(b)+" "+std::to_string(w)+"\n2 "+std::to_string(o)+" "+std::to_string(e)+"\n"))return false;
-        balance=b;wins=w;owned=o;equipped=e;return true;
+    bool save(std::int64_t b,std::int64_t w,std::uint64_t o,std::uint64_t e,std::int64_t claimed=-1) {
+        if(claimed<0)claimed=passive_claimed;
+        if(path.empty() || !atomic_text(path,std::to_string(b)+" "+std::to_string(w)+"\n2 "+std::to_string(o)+" "+std::to_string(e)+" "+std::to_string(claimed)+"\n"))return false;
+        balance=b;wins=w;owned=o;equipped=e;passive_claimed=claimed;return true;
     }
+    bool claim_passive(std::int64_t total){if(total<=passive_claimed)return true;if(total>=1000000000000LL || balance>999999999999LL-(total-passive_claimed))return false;return save(balance+total-passive_claimed,wins,owned,equipped,total);}
     bool has(int id) const {return id>=0 && id<item_count && (owned&(1ULL<<id));}
     bool uses(int id) const {return has(id) && (equipped&(1ULL<<id));}
     bool purchase(int id,int cost) {

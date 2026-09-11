@@ -1,0 +1,4 @@
+Kalwer native game sources, including the separately executed GPL Doomgeneric runtime and build instructions:
+https://github.com/aridlin/kalwer
+
+Kar and Doom game data download separately on first use. Commercial Doom WADs are user-provided.

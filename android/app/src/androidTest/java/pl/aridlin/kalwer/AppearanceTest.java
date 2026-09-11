@@ -29,4 +29,10 @@ public final class AppearanceTest extends AndroidTestCase {
         }
         input.recycle();
     }
+    public void testPaddedSnapshotCopy(){
+        java.nio.ByteBuffer plane=java.nio.ByteBuffer.allocateDirect(24);
+        byte[] row={(byte)255,0,0,(byte)255,0,(byte)255,0,(byte)255,99,99,99,99};plane.put(row);plane.put(new byte[]{0,0,(byte)255,(byte)255,0x12,0x34,0x56,(byte)255,99,99,99,99});plane.position(0);
+        int[] colors=BackdropCaptureService.copyPixels(plane,2,2,12,4);
+        assertEquals(0xffff0000,colors[0]);assertEquals(0xff00ff00,colors[1]);assertEquals(0xff0000ff,colors[2]);assertEquals(0xff123456,colors[3]);assertEquals(0,plane.position());
+    }
 }

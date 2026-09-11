@@ -1,15 +1,22 @@
 name: Android
 on:
   push:
-    paths: ['android/**', '.github/workflows/android.yml']
+    paths: ['android/**', '*.hpp', 'koom/**', 'vendor/doomgeneric/**', '.github/workflows/android.yml']
   pull_request:
-    paths: ['android/**', '.github/workflows/android.yml']
+    paths: ['android/**', '*.hpp', 'koom/**', 'vendor/doomgeneric/**', '.github/workflows/android.yml']
   workflow_dispatch:
+concurrency:
+  group: android-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ANDROID_AVD_HOME: /tmp/kalwer-avd
+      ANDROID_USER_HOME: /tmp/kalwer-android
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -19,12 +26,43 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v4
       - name: Install SDK components
-        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1' 'emulator' 'system-images;android-35;default;x86_64'
       - name: Build and verify
         working-directory: android
         run: |
           ./test-search.sh
           ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Boot Android test device
+        timeout-minutes: 6
+        run: |
+          sudo chmod 666 /dev/kvm
+          mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
+          echo no | avdmanager create avd --force -n kalwer-ci -p "$ANDROID_AVD_HOME/kalwer-ci.avd" -k 'system-images;android-35;default;x86_64'
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx kalwer-ci
+          "$ANDROID_HOME/emulator/emulator" -avd kalwer-ci -no-window -no-snapshot -no-audio -gpu swangle -memory 2048 -cores 2 > /tmp/kalwer-emulator.log 2>&1 &
+          timeout 120 adb wait-for-device || { cat /tmp/kalwer-emulator.log; exit 1; }
+          for i in $(seq 1 120); do
+            if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi
+            sleep 2
+          done
+          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
+          adb shell input keyevent 82
+      - name: Native popup and Koom device tests
+        timeout-minutes: 8
+        working-directory: android
+        run: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=pl.aridlin.kalwer.GameTest
+      - name: Collect device logs
+        if: always()
+        run: timeout 20 adb logcat -d > /tmp/kalwer-android-logcat.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kalwer-android-device-tests
+          path: |
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+            /tmp/kalwer-emulator.log
+            /tmp/kalwer-android-logcat.txt
       - uses: actions/upload-artifact@v4
         with:
           name: kalwer-android

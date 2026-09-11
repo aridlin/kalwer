@@ -47,6 +47,9 @@ int main(){
     quick.hit(games::Kar::Impact::Hit::knockdown,games::kar_physics::from_kph(200));
     assert(standard.phase==games::Kar::Phase::wreck && standard.phase_time==2 && quick.phase_time==1);
     shop.selected=0;shop.pointer(340,440,1);assert(shop.selected==6);shop.pointer(340,440,1);assert(shop.selected==12);shop.pointer(60,440,1);assert(shop.selected==6);
+    auto before_passive=wallet.balance;assert(wallet.claim_passive(12) && wallet.balance==before_passive+12);
+    assert(wallet.claim_passive(12) && wallet.balance==before_passive+12);
+    restored.load();assert(restored.passive_claimed==12);assert(restored.claim_passive(15) && restored.balance==before_passive+15);
     // Failed hidden unlock saves must not change memory or grant ownership.
     wallet.owned=wallet.equipped=0;wallet.path=dir/"directory";assert(!wallet.unlock_games() && wallet.owned==0);wallet.path=original;
     std::filesystem::remove_all(dir);std::cout<<"Legacy wallet migration, atomic purchases, ownership, equip toggles, effects and local chess reward exclusion passed.\n";
