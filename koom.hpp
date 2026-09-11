@@ -6,6 +6,7 @@
 #include <functional>
 #include <thread>
 #include <mutex>
+#include <memory>
 #include <cstdio>
 #include <cstring>
 #ifdef _WIN32
@@ -26,6 +27,18 @@ inline std::string filename(const std::filesystem::path& path){auto text=path.fi
 inline bool write_bundle_file(const std::filesystem::path& path,const void* data,size_t size) {std::ofstream out(path,std::ios::binary|std::ios::trunc);out.write(static_cast<const char*>(data),size);return bool(out);}
 
 inline std::function<bool(const std::filesystem::path&)> install_bundle;
+inline std::mutex preparation_mutex;
+struct Preparation {
+    std::atomic<bool> ready{false};bool okay=false;
+    static std::shared_ptr<Preparation> start(std::filesystem::path dir){
+        auto result=std::make_shared<Preparation>();auto install=install_bundle;
+        std::thread([result,dir=std::move(dir),install=std::move(install)]{
+            std::lock_guard lock(preparation_mutex);
+            try{result->okay=install && install(dir);}catch(...){result->okay=false;}
+            result->ready.store(true,std::memory_order_release);
+        }).detach();return result;
+    }
+};
 inline std::filesystem::path directory(){return wallet.path.parent_path()/"koom";}
 inline bool valid_wad(const std::filesystem::path& path,bool* iwad=nullptr) {
     std::ifstream in(path,std::ios::binary);unsigned char h[12]{};if(!in.read(reinterpret_cast<char*>(h),12))return false;
@@ -74,7 +87,12 @@ struct Session {
         sigset_t blocked;sigemptyset(&blocked);sigaddset(&blocked,SIGPIPE);pthread_sigmask(SIG_BLOCK,&blocked,nullptr);
 #endif
         const auto dir=directory();
-        try{if(!install_bundle || !install_bundle(dir)){fail("Game data unavailable. Check connection; R retries.");return;}}catch(...){fail("Could not prepare Koom files.");return;}
+        auto preparation=Preparation::start(dir);
+        {std::unique_lock lock(mutex);
+            while(!stop && !preparation->ready.load(std::memory_order_acquire))wake.wait_for(lock,std::chrono::milliseconds(25));
+            if(stop)return;
+        }
+        if(!preparation->okay){fail("Game data unavailable. Check connection; R retries.");return;}
         auto base=selected_base.empty()?dir/"freedoom2.wad":selected_base;bool is_base=false;
         if(!valid_wad(base,&is_base) || !is_base){fail("The selected base IWAD is invalid.");return;}
         is_base=false;

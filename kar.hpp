@@ -48,8 +48,10 @@ struct Kar {
         jump_height=jump_velocity=0;started=over=won=police_active=false;notice.clear();
         roadblocks={};roadblock_time=0;
         for(int i=0;i<int(racers.size());++i){
-            auto& r=racers[i];r={};r.motion.reset(i%4);r.police=i==11;r.traffic=i>=7 && i<11;r.oncoming=r.traffic && i%2;
-            r.lane=((i%3)-1)*520;
+            auto& r=racers[i];r={};r.motion.reset(i<7?vehicle:i%4);r.police=i==11;r.traffic=i>=7 && i<11;r.oncoming=r.traffic && i%2;
+            // Reference starting grid: alternating sides at road half-width/6,
+            // staggered by 512 longitudinal units (not three broad columns).
+            r.lane=i<7?(i%2?1:-1)*(kar_course::half_width/6):((i%2?1:-1)*720);
             place(r.road,absolute(road)+(i<7?(7-i)*512:10000+(i-7)*6000),r.lane);r.previous=r.road;
         }
     }
@@ -60,7 +62,7 @@ struct Kar {
         if(key<0 || key>=256)return;
         bool pressed=down && !held[key];held[key]=down;if(!pressed || over)return;
         if(phase==Phase::ready){
-            if(key=='c'){vehicle=(vehicle+1)%4;motion.reset(vehicle);return;}
+            if(key=='c'){vehicle=(vehicle+1)%4;motion.reset(vehicle);for(int i=0;i<7;++i)racers[i].motion.reset(vehicle);return;}
             if(key==13 || key==' '){started=true;phase=Phase::countdown;phase_time=3;return;}
         }
         if(phase!=Phase::racing)return;
@@ -144,10 +146,32 @@ struct Kar {
                 // Opponents use the reference's catch-up bands around the player.
                 int percent=gap>4096?95:gap< -2048?125:105;
                 int target=motion.speed*percent/100;
-                target=std::clamp(target,kar_physics::from_kph(45),kar_physics::from_kph(kar_physics::vehicles[r.motion.vehicle].maximum));
+                // Match the player's vehicle class and the reference rival
+                // pace caps. Previously every default-car opponent had a
+                // faster class and targeted 105% speed whenever approached.
+                constexpr int pace[]={93,93,93,93,95,95,95};
+                int maximum=kar_physics::vehicles[r.motion.vehicle].maximum;
+                if(!r.police)maximum=maximum*pace[i%7]/100;
+                target=std::clamp(target,kar_physics::from_kph(45),kar_physics::from_kph(maximum));
                 if(elapsed>8)r.motion.speed+=(target-r.motion.speed)/8;
                 int aim=r.police?road.lateral:r.lane;
                 int slide=r.police?6:3;r.road.lateral+=std::clamp(aim-r.road.lateral,-slide,slide);
+            }
+            if(!r.traffic && !r.police){
+                // Rivals must follow the car ahead instead of converging onto
+                // the same catch-up position and drawing through one another.
+                int nearest=1800,leader_speed=r.motion.speed;
+                auto consider=[&](const Road& ahead,int speed){int gap=ahead.gap_to(r.road,segments);if(gap>0 && gap<nearest && std::abs(ahead.lateral-r.road.lateral)<240){nearest=gap;leader_speed=speed;}};
+                for(int j=0;j<int(racers.size());++j){const auto& other=racers[j];if(j!=i && !other.oncoming && !other.impact.wrecked && (!other.police || police_active))consider(other.road,other.motion.speed);}
+                if(phase==Phase::racing)consider(road,motion.speed);
+                if(nearest<1800){
+                    int following=std::max(0,leader_speed+kar_physics::from_kph((nearest-750)*36/1000));
+                    if(r.motion.speed>following)r.motion.speed-=std::min(r.motion.speed-following,kar_physics::from_kph(2));
+                    // Never integrate through the preceding car during a hard
+                    // stop, even when ordinary braking cannot recover the gap.
+                    int clearance_speed=std::max(0,nearest-500)*40*unit/dt;
+                    r.motion.speed=std::min(r.motion.speed,clearance_speed);
+                }
             }
             int distance=Road::rounded_q12(std::int64_t(r.motion.road_speed())*dt)/40;
             r.road.advance(r.oncoming?-distance:distance,kar_course::curves,false);
@@ -223,9 +247,13 @@ struct Kar {
         double elevation=v.elevation[index]+(v.elevation[index+1]-v.elevation[index])*part;
         double heading=steering.camera*6.283185307179586/2048.;
         double xx=x+lateral-road.lateral-std::sin(heading)*distance;
-        double factor=180/std::max(250.,distance+1250);
-        return {120+xx*factor,190+(600-elevation*.35)*factor,1110*factor,factor};
+        // Reference camera: 200 px focal length, 450-unit sprite scale,
+        // 204-unit camera height, and a 200 px horizon. Sprite scale and road
+        // projection must share this denominator or cars engulf whole lanes.
+        double factor=200/std::max(250.,distance+450);
+        return {120+xx*factor,200+(204-elevation)*factor,kar_course::half_width*factor,factor};
     }
+    static double vehicle_scale(const Projected& point){return std::min(1.1,point.depth*450/200);}
     template<class C>static void vehicle_art(C& p,double x,double y,double scale,unsigned color,int yaw=0,bool cop=false,bool front=false){
         double s=scale;auto r=[&](double a,double b,double w,double h,unsigned c){p.rect(x+a*s,y+b*s,w*s,h*s,c);};
         auto shade=[&](unsigned c,int percent){unsigned out=0;for(int shift:{0,8,16})out|=unsigned(std::clamp(int((c>>shift)&255)*percent/100,0,255))<<shift;return out;};
@@ -353,8 +381,9 @@ struct Kar {
         std::array<int,12> order{};for(int i=0;i<12;i++)order[i]=i;
         std::sort(order.begin(),order.end(),[&](int a,int b){return racers[a].road.gap_to(road,segments)>racers[b].road.gap_to(road,segments);});
         constexpr unsigned colors[]={0x5795bd,0xd75543,0xd2b45a,0x778994,0x8b6faf,0xe8e9df,0x628966};
-        for(int i:order){const auto& r=racers[i];if(r.police && !police_active)continue;int gap=r.road.gap_to(road,segments);if(gap<0 || gap>16000 || r.impact.wrecked)continue;auto q=project(projected,gap,r.road.lateral);if(q.x<20 || q.x>220)continue;if(art){unsigned bank=r.police?2019:r.traffic?2011:2017;art->draw(p,bank,r.oncoming?0:2,int(q.x),int(q.y),std::min(1.1,q.depth*9));}
-            else vehicle_art(p,q.x,q.y,std::min(1.1,q.depth*9),colors[i%7],0,r.police,r.oncoming);}
+        constexpr unsigned rival_banks[]={2022,2011,2017,2019,2028,2022,2011};
+        for(int i:order){const auto& r=racers[i];if(r.police && !police_active)continue;int gap=r.road.gap_to(road,segments);if(gap<0 || gap>16000 || r.impact.wrecked)continue;auto q=project(projected,gap,r.road.lateral);if(q.x< -80 || q.x>320)continue;if(art){unsigned bank=r.police?2015:r.traffic?2011:rival_banks[i%7];art->draw(p,bank,r.oncoming?11:4,int(q.x),int(q.y),vehicle_scale(q));}
+            else vehicle_art(p,q.x,q.y,vehicle_scale(q),colors[i%7],0,r.police,r.oncoming);}
         if(motion.stage>0){p.line(101,286,97,308,0x91ecff,5);p.line(139,286,143,308,0x91ecff,5);}
         if(steering.drift){p.line(91,283,80-steering.drift*8,312,0x596264,2);p.line(145,283,146-steering.drift*8,312,0x596264,2);}
         if(invulnerable<=0 || int(elapsed*12)%2==0){
