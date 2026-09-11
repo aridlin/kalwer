@@ -47,12 +47,8 @@ public final class BackdropCaptureService extends Service {
                 if(finished)return;
                 try(Image image=source.acquireLatestImage()) {
                     if(image==null)return;
-                    Image.Plane plane=image.getPlanes()[0];ByteBuffer bytes=plane.getBuffer();int stride=plane.getRowStride(),pixelStride=plane.getPixelStride();int[] pixels=new int[w*h];
-                    if(pixelStride==4){
-                        bytes.order(ByteOrder.LITTLE_ENDIAN);
-                        for(int y=0;y<h;y++){bytes.position(y*stride);bytes.asIntBuffer().get(pixels,y*w,w);}
-                        for(int i=0;i<pixels.length;i++){int rgba=pixels[i];pixels[i]=0xff000000|((rgba&255)<<16)|(rgba&0xff00)|((rgba>>>16)&255);}
-                    }else for(int y=0;y<h;y++)for(int x=0;x<w;x++){int offset=y*stride+x*pixelStride;pixels[y*w+x]=Color.rgb(bytes.get(offset)&255,bytes.get(offset+1)&255,bytes.get(offset+2)&255);}
+                    Image.Plane plane=image.getPlanes()[0];
+                    int[] pixels=copyPixels(plane.getBuffer(),w,h,plane.getRowStride(),plane.getPixelStride());
                     latestPixels=pixels;
                 } catch(RuntimeException ignored) { }
             },worker);
@@ -69,6 +65,15 @@ public final class BackdropCaptureService extends Service {
             main.postDelayed(()->finishCapture(null),4000);
         } catch(RuntimeException e) {finishCapture(null);}
         return START_NOT_STICKY;
+    }
+    static int[] copyPixels(ByteBuffer source,int w,int h,int stride,int pixelStride){
+        ByteBuffer bytes=source.duplicate();int[] pixels=new int[w*h];
+        if(pixelStride==4){
+            bytes.order(ByteOrder.LITTLE_ENDIAN);
+            for(int y=0;y<h;y++){bytes.position(y*stride);bytes.asIntBuffer().get(pixels,y*w,w);}
+            for(int i=0;i<pixels.length;i++){int rgba=pixels[i];pixels[i]=0xff000000|((rgba&255)<<16)|(rgba&0xff00)|((rgba>>>16)&255);}
+        }else for(int y=0;y<h;y++)for(int x=0;x<w;x++){int offset=y*stride+x*pixelStride;pixels[y*w+x]=Color.rgb(bytes.get(offset)&255,bytes.get(offset+1)&255,bytes.get(offset+2)&255);}
+        return pixels;
     }
     private void finishCapture(Snapshot image) {
         if(finished){if(image!=null)image.recycle();return;}finished=true;
