@@ -31,6 +31,10 @@ static ma_mutex lock;
 static int output_ready=0,lock_ready=0;
 static float ring[RING_FRAMES*2];
 static unsigned int read_frame=0,write_frame=0;
+// Two synthesis periods absorb scheduler/pipe jitter without buffering an
+// entire ring (which would make controls and focus changes sound delayed).
+#define PRIME_FRAMES (RATE * 58 / 1000)
+static int primed=0;
 static FILE* capture;
 static tsf* synth;
 static tml_message *song,*event;
@@ -44,9 +48,14 @@ static Channel channels[CHANNELS];
 static void output(ma_device* d,void* buffer,const void* input,ma_uint32 count){
     (void)d;(void)input;float* out=buffer;memset(out,0,count*2*sizeof(float));
     ma_mutex_lock(&lock);
+    if(!primed){
+        if(write_frame-read_frame<PRIME_FRAMES){ma_mutex_unlock(&lock);return;}
+        primed=1;
+    }
     for(unsigned int i=0;i<count && read_frame!=write_frame;i++,read_frame++){
         unsigned int at=read_frame%RING_FRAMES;out[i*2]=ring[at*2];out[i*2+1]=ring[at*2+1];
     }
+    if(read_frame==write_frame)primed=0;
     ma_mutex_unlock(&lock);
 }
 void KoomAudioShutdown(void){

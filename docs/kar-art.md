@@ -5,15 +5,20 @@ road geometry and scene primitives. The desktop GPU presents that frame using
 nearest-neighbor sampling. No Java runtime or game executable runs during play.
 The popup's animation, focus pause, wallet and daily trial remain host features.
 
-An external art pack can replace the built-in fallback graphics. Put `art.karp`
-and its optional `art.kars` scene alongside each other in the `kar` directory
-next to `koins-v1` in Kalwer's state directory. Reopen Kar after changing a pack.
-The pack loads on a worker so file reads do not delay the popup animation.
-Invalid or missing packs leave the fallback renderer available.
+Kar downloads its default sprite and scene packs from the pinned `game-data-v1`
+GitHub release on first launch. Both files are checked against their expected
+size and SHA-256 before they become the active cache. Downloading happens on a
+worker; the popup remains responsive and the daily trial does not advance.
+The installed cache works offline. Press R to retry a failed download.
 
-Artwork has its own licensing; Kalwer's MIT license does not grant rights to
-third-party game art. The repository and desktop release do not include the
-commercial reference game's artwork or executable.
+Use `/kar-import "path/to/art.karp"` to install a different pack and its adjacent
+`art.kars` scene on either desktop platform. Reopen Kar after importing.
+Manually installed packs live in the `kar` directory next to `koins-v1` in
+Kalwer's state directory. A valid custom pack takes priority over the default.
+
+Artwork has its own copyright; Kalwer's MIT license does not grant rights to
+third-party game art. The reference artwork is distributed separately as game
+data, not linked into the launcher executable. No Java runtime is included.
 
 ## Building a pack
 
