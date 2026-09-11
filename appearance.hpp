@@ -80,23 +80,23 @@ struct Wallet {
         if(in>>b>>w && b>=0 && b<1000000000000LL && w>=0) {
             balance=b;wins=w;owned=equipped=0;
             int version=0;std::uint64_t o=0,e=0;
-            if(in>>version>>o>>e && version==2){owned=o&31;equipped=e&owned;}
+            if(in>>version>>o>>e && version==2){owned=o&511;equipped=e&owned;}
         }
     }
     bool save(std::int64_t b,std::int64_t w,std::uint64_t o,std::uint64_t e) {
         if(path.empty() || !atomic_text(path,std::to_string(b)+" "+std::to_string(w)+"\n2 "+std::to_string(o)+" "+std::to_string(e)+"\n"))return false;
         balance=b;wins=w;owned=o;equipped=e;return true;
     }
-    bool has(int id) const {return id>=0 && id<5 && (owned&(1ULL<<id));}
+    bool has(int id) const {return id>=0 && id<9 && (owned&(1ULL<<id));}
     bool uses(int id) const {return has(id) && (equipped&(1ULL<<id));}
     bool purchase(int id,int cost) {
-        if(id<0 || id>=5 || cost<=0 || has(id) || balance<cost)return false;
+        if(id<0 || id>=9 || cost<=0 || has(id) || balance<cost)return false;
         return save(balance-cost,wins,owned|(1ULL<<id),equipped|(1ULL<<id));
     }
     bool toggle(int id) {return has(id) && save(balance,wins,owned,equipped^(1ULL<<id));}
-    bool credit(int amount) {
+    bool credit(int amount, bool victory=true) {
         if(amount<=0 || balance>999999999999LL-amount) return false;
-        return save(balance+amount,wins+1,owned,equipped);
+        return save(balance+amount,wins+(victory?1:0),owned,equipped);
     }
 };
 inline Wallet wallet;

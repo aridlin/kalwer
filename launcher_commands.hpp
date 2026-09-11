@@ -8,6 +8,12 @@ namespace kalwer {
 struct PopupDocument { std::string title, body; };
 struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
+    Command{"/wad-import", "Install a Doom-compatible WAD: /wad-import <path>", ""},
+    Command{"/games", "All games and permanent unlocks", ""},
+    Command{"/tetris", "Falling blocks, line clears and ghost piece", ""},
+    Command{"/breakout", "Paddle, ball and three brick boards", ""},
+    Command{"/kar", "Native arcade phone racing", ""},
+    Command{"/koom", "Doom-compatible Freedoom player", ""},
     Command{"/snake", "Play native Snake (pauses when unfocused)", ""},
     Command{"/minesweeper", "Play native Minesweeper", ""},
     Command{"/peggle", "Play native peg-and-ball arcade", ""},
@@ -35,14 +41,16 @@ inline constexpr std::array commands = {
 inline std::vector<const Command*> matching_commands(std::string prefix) {
     for (auto& c : prefix) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
     std::vector<const Command*> matches;
+    static const Command secret{"/doom","Koom",""};
+    if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
-        for (const auto& command : commands) if (command.name.starts_with(prefix)) matches.push_back(&command);
+        for (const auto& command : commands) if (command.name.starts_with(prefix) || (command.name=="/wad-import" && prefix.starts_with("/wad-import "))) matches.push_back(&command);
     return matches;
 }
 inline PopupDocument help() {
     PopupDocument result{"KALWER HELP", "SEARCH MODES\nText: apps    :text: files\n> command: shell    ? text: web\n< : background jobs\n\nCOMMANDS\n"};
     for (const auto& command : commands) result.body += std::string(command.name) + "  " + std::string(command.description) + "\n";
-    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: favorite app\n\nFiles: system-wide names and paths.\nWindows: Everything; Linux: plocate.\n/index: status    /index-setup: setup.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
+    result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: multiline input\nCtrl+Shift+Enter: favorite app\n\nFiles: system-wide names and paths.\nWindows: Everything; Linux: plocate.\n/index: status    /index-setup: setup.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
     return result;
 }
 inline PopupDocument about() { return {"ABOUT KALWER", "Kalwer\nResident application and file launcher.\n\nLinux and Windows share commands and\nnative system-wide file indexes.\n\nType /help for commands and shortcuts.\n"}; }

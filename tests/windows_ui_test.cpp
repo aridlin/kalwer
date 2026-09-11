@@ -46,6 +46,20 @@ int main() {
         Sleep(1);
     }
     assert(done);
+    auto job=create_command_job(L"echo kalwer-first-line\necho kalwer-second-line");
+    assert(job);
+    assert(WaitForSingleObject(job->process,15000)==WAIT_OBJECT_0);
+    if(job->waiter.joinable())job->waiter.join();
+    {std::lock_guard lock(job->output_mutex);assert(job->output.find("kalwer-first-line")!=std::string::npos);assert(job->output.find("kalwer-second-line")!=std::string::npos);}
+    auto script=job->script.path;
+    CloseHandle(job->input_write);CloseHandle(job->output_read);CloseHandle(job->process_thread);CloseHandle(job->process);job.reset();assert(!std::filesystem::exists(script));
+    auto blocked=create_command_job(L"ping -n 2 127.0.0.1 >nul");assert(blocked);state.popup_job=blocked.get();
+    std::string large_input(1024*1024,'x');auto queued_at=std::chrono::steady_clock::now();write_job_input(large_input.data(),static_cast<DWORD>(large_input.size()));
+    assert(std::chrono::steady_clock::now()-queued_at<std::chrono::milliseconds(100));
+    auto stopped_by=std::chrono::steady_clock::now()+std::chrono::seconds(15);
+    while(!blocked->reaped.load() && std::chrono::steady_clock::now()<stopped_by)Sleep(10);
+    assert(blocked->reaped.load());blocked->waiter.join();state.popup_job=nullptr;
+    CloseHandle(blocked->input_write);CloseHandle(blocked->output_read);CloseHandle(blocked->process_thread);CloseHandle(blocked->process);blocked.reset();
     app_search.stop();icon_worker.stop();
     std::filesystem::remove_all(directory);
     CoUninitialize();

@@ -61,7 +61,7 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
     g_signal_connect_object(window,"notify::is-active",G_CALLBACK(+[](GObject* window,GParamSpec*,gpointer data) {
         auto* canvas=GTK_WIDGET(data);
         auto* s=static_cast<GtkGame*>(g_object_get_data(G_OBJECT(canvas),"kalwer-game"));
-        s->game.focused=gtk_window_is_active(GTK_WINDOW(window)); s->last=g_get_monotonic_time();
+        s->game.focused=gtk_window_is_active(GTK_WINDOW(window)); s->game.koom.focus(s->game.focused); s->last=g_get_monotonic_time();
         gtk_gl_area_queue_render(GTK_GL_AREA(canvas));
     }),canvas,G_CONNECT_DEFAULT);
     g_signal_connect(canvas,"button-press-event",G_CALLBACK(+[](GtkWidget* widget,GdkEventButton* e,gpointer data)->gboolean {
@@ -74,7 +74,7 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
     }),session);
     g_signal_connect(canvas,"motion-notify-event",G_CALLBACK(+[](GtkWidget* widget,GdkEventMotion* e,gpointer data)->gboolean {
         auto* s=static_cast<GtkGame*>(data);
-        if(s->game.kind==Kind::peggle) { s->game.pointer((e->x*320/gtk_widget_get_allocated_width(widget)-19)*420/292,38+(e->y*378/gtk_widget_get_allocated_height(widget)-59)*452/310,0); gtk_gl_area_queue_render(GTK_GL_AREA(widget)); } return TRUE;
+        if((s->game.kind==Kind::peggle || s->game.kind==Kind::breakout)) { s->game.pointer((e->x*320/gtk_widget_get_allocated_width(widget)-19)*420/292,38+(e->y*378/gtk_widget_get_allocated_height(widget)-59)*452/310,0); gtk_gl_area_queue_render(GTK_GL_AREA(widget)); } return TRUE;
     }),session);
     session->timer=g_timeout_add(16,+[](gpointer data)->gboolean {
         auto* widget=GTK_WIDGET(data);auto* s=static_cast<GtkGame*>(g_object_get_data(G_OBJECT(widget),"kalwer-game"));
@@ -82,7 +82,7 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
         if(s->game.focused && s->last){
             int seconds=int(s->game.elapsed);auto head=s->game.snake.front();bool over=s->game.over;int ply=s->game.chess_game.position.ply;
             s->game.tick((now-s->last)/1000000.);
-            bool moving=s->game.kind==Kind::peggle || (s->game.kind==Kind::garden && s->game.started && !s->game.over) || ply!=s->game.chess_game.position.ply || !(head==s->game.snake.front()) || seconds!=int(s->game.elapsed) || over!=s->game.over || (s->game.won && s->game.celebration<3);
+            bool moving=s->game.kind==Kind::peggle || s->game.kind==Kind::tetris || s->game.kind==Kind::breakout || s->game.kind==Kind::kar || s->game.kind==Kind::koom || (s->game.kind==Kind::garden && s->game.started && !s->game.over) || ply!=s->game.chess_game.position.ply || !(head==s->game.snake.front()) || seconds!=int(s->game.elapsed) || over!=s->game.over || (s->game.won && s->game.celebration<3);
             if(moving)gtk_gl_area_queue_render(GTK_GL_AREA(widget));
         }
         s->last=now;return G_SOURCE_CONTINUE;

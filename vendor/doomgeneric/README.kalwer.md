@@ -1,0 +1,1 @@
+Doomgeneric from https://github.com/ozkl/doomgeneric at dcb7a8dbc7a16ce3dda29382ac9aae9d77d21284. GPL-2.0-or-later; see LICENSE and source headers. Built as a separate framebuffer runtime using ../../koom/host.c.
