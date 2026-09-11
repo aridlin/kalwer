@@ -33,7 +33,7 @@ struct Kar {
     bool started=false,over=false,won=false,police_active=false;
     std::string notice;
     std::shared_ptr<kar_pixels::ArtRequest> artwork;
-    void load_art(const std::filesystem::path& path){if(!artwork)artwork=kar_pixels::ArtRequest::start(path);}
+    void load_art(const std::filesystem::path& path){if(!artwork || (artwork->ready.load(std::memory_order_acquire) && !artwork->get()))artwork=kar_pixels::ArtRequest::start(path);}
     static int absolute(const Road& r){return (r.lap*segments+r.segment)*1024+r.offset;}
     static void place(Road& r,int distance,int lateral){
         int length=segments*1024;r.lap=distance/length;distance%=length;
@@ -56,6 +56,7 @@ struct Kar {
     void focus(bool focused){if(!focused){held.fill(false);accumulator=0;}}
     void say(std::string text,double seconds=1.3){notice=std::move(text);notice_time=seconds;}
     void key(int key,bool down=true){
+        if(artwork && !artwork->get())return;
         if(key<0 || key>=256)return;
         bool pressed=down && !held[key];held[key]=down;if(!pressed || over)return;
         if(phase==Phase::ready){
@@ -189,6 +190,7 @@ struct Kar {
         if(road.lap>=4){phase=Phase::finished;over=true;won=position<=3;score+=(9-position)*1000;say(won?"PODIUM!":"RACE COMPLETE",10);held.fill(false);}
     }
     void advance(double dt){
+        if(artwork && !artwork->get())return;
         if(!started || over || dt<=0)return;
         accumulator+=std::min(dt,.1);
         while(accumulator+1e-9>=.02){accumulator-=.02;step();if(over)break;}
@@ -394,6 +396,13 @@ struct Kar {
     }
     mutable kar_pixels::Surface framebuffer;
     template<class P>void draw(P& output)const {
+        if(artwork && !artwork->get()){
+            bool ready=artwork->ready.load(std::memory_order_acquire);
+            output.text(28,100,23,"KAR",0x8ce9b3);
+            output.text(28,155,14,ready?"Artwork download failed":"Downloading Kar artwork…",0xe0f5e8);
+            output.text(28,190,12,ready?"Check your connection; press R to retry.":"First launch only. Your trial is paused.",0x8dada1);
+            return;
+        }
         draw_race(framebuffer);
         if constexpr(requires{output.image(57,38,306,408,framebuffer.pixels.data(),240,320);}){
             output.image(57,38,306,408,framebuffer.pixels.data(),240,320);

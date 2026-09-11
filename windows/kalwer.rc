@@ -32,7 +32,4 @@ BEGIN
     END
 END
 
-201 RCDATA "../assets/koom/freedoom2.wad"
 202 RCDATA "../build-koom-windows/kalwer-koom.exe"
-
-203 RCDATA "../assets/koom/TimGM6mb.sf2"

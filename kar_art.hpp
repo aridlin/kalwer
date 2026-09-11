@@ -1,5 +1,6 @@
 #pragma once
 #include "kar_pixels.hpp"
+#include "game_assets.hpp"
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -79,7 +80,16 @@ struct ArtRequest {
     static std::shared_ptr<ArtRequest> start(std::filesystem::path path){
         auto request=std::make_shared<ArtRequest>();
         std::thread([request,path=std::move(path)](){
-            try{request->result=Art::load(path);}catch(...){request->result.reset();}
+            try{
+                request->result=Art::load(path);
+                // An interrupted first download may leave the validated sprite
+                // file without its scene. Finish that pair before exposing it.
+                if(request->result && request->result->scene.empty() && game_assets::valid(path,game_assets::kar_art)) {
+                    if(game_assets::ensure(path.parent_path(),game_assets::kar_scene))request->result=Art::load(path);
+                    else request->result.reset();
+                }
+                if(!request->result && game_assets::ensure(path.parent_path(),game_assets::kar_art) && game_assets::ensure(path.parent_path(),game_assets::kar_scene))request->result=Art::load(path);
+            }catch(...){request->result.reset();}
             request->ready.store(true,std::memory_order_release);
         }).detach();
         return request;

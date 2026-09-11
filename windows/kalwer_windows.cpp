@@ -872,10 +872,16 @@ std::uint32_t bounded_unsigned(const std::string& value, std::uint32_t fallback,
 }
 
 void load_settings() {
+    kalwer::game_assets::hash=[](const std::vector<unsigned char>& bytes){return sha256_hex(bytes);};
+    kalwer::game_assets::download=[](const std::string& url,const std::filesystem::path& target){
+        std::vector<std::uint8_t> bytes;if(!http_get(wide(url),&bytes))return false;
+        return kalwer::koom::write_bundle_file(target,bytes.data(),bytes.size());
+    };
     kalwer::koom::install_bundle=[](const std::filesystem::path& dir){
         std::filesystem::create_directories(dir);
-        for(int id:{201,202,203}) {
-            auto path=dir/(id==201?"freedoom2.wad":id==202?"kalwer-koom.exe":"TimGM6mb.sf2");if(id!=202 && std::filesystem::exists(path))continue;
+        if(!kalwer::game_assets::ensure(dir,kalwer::game_assets::freedoom) || !kalwer::game_assets::ensure(dir,kalwer::game_assets::soundfont))return false;
+        for(int id:{202}) {
+            auto path=dir/"kalwer-koom.exe";
             auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(id),RT_RCDATA);if(!resource)return false;
             auto loaded=LoadResource(nullptr,resource);if(!loaded)return false;
             if(!kalwer::koom::write_bundle_file(path,LockResource(loaded),SizeofResource(nullptr,resource)))return false;

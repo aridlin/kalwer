@@ -49,7 +49,7 @@ inline std::string import_wad(std::filesystem::path source) {
 struct Session {
     std::mutex mutex;std::condition_variable wake;
     bool stop=false,focused=false;std::array<unsigned char,256> keys{};
-    std::vector<uint32_t> pixels;uint64_t sequence=0;uint32_t completed_maps=0;std::string error="Loading Koom…";
+    std::vector<uint32_t> pixels;uint64_t sequence=0;uint32_t completed_maps=0;std::string error="Preparing Koom; first launch downloads game data…";
 #ifdef _WIN32
     HANDLE process=nullptr;
 #else
@@ -74,7 +74,7 @@ struct Session {
         sigset_t blocked;sigemptyset(&blocked);sigaddset(&blocked,SIGPIPE);pthread_sigmask(SIG_BLOCK,&blocked,nullptr);
 #endif
         const auto dir=directory();
-        try{if(!install_bundle || !install_bundle(dir)){fail("Could not install the bundled Koom runtime.");return;}}catch(...){fail("Could not prepare Koom files.");return;}
+        try{if(!install_bundle || !install_bundle(dir)){fail("Game data unavailable. Check connection; R retries.");return;}}catch(...){fail("Could not prepare Koom files.");return;}
         auto base=selected_base.empty()?dir/"freedoom2.wad":selected_base;bool is_base=false;
         if(!valid_wad(base,&is_base) || !is_base){fail("The selected base IWAD is invalid.");return;}
         is_base=false;
@@ -162,7 +162,7 @@ struct Game {
         }
     }
     template<class P>void draw(P& p)const {
-        if(!session){p.text(28,100,23,"KOOM",0x8ce9b3);p.text(28,150,14,wads.empty() || wads[selected].empty()?"Freedoom: Phase 2 (included)":filename(wads[selected]),0xe0f5e8);p.text(28,195,12,"Left / Right: choose WAD   Enter: play",0x8dada1);p.text(28,228,11,"Tab: PWAD base - "+(bases.empty() || bases[base_selected].empty()?std::string("Freedoom"):filename(bases[base_selected])),0x8dada1);p.text(28,265,12,"/wad-import <path> installs your own WAD",0x8dada1);return;}
+        if(!session){p.text(28,100,23,"KOOM",0x8ce9b3);p.text(28,150,14,wads.empty() || wads[selected].empty()?"Freedoom: Phase 2 (downloads once)":filename(wads[selected]),0xe0f5e8);p.text(28,195,12,"Left / Right: choose WAD   Enter: play",0x8dada1);p.text(28,228,11,"Tab: PWAD base - "+(bases.empty() || bases[base_selected].empty()?std::string("Freedoom"):filename(bases[base_selected])),0x8dada1);p.text(28,265,12,"/wad-import <path> installs your own WAD",0x8dada1);return;}
         std::lock_guard lock(session->mutex);
         if(!session->pixels.empty()){
             if constexpr(requires{p.image(10,105,400,300,session->pixels.data(),320,200);})p.image(10,105,400,300,session->pixels.data(),320,200);

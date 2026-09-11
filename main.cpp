@@ -35,8 +35,6 @@
 #include <vector>
 
 extern "C" {
-extern const unsigned char _binary_assets_koom_TimGM6mb_sf2_start[],_binary_assets_koom_TimGM6mb_sf2_end[];
-extern const unsigned char _binary_assets_koom_freedoom2_wad_start[],_binary_assets_koom_freedoom2_wad_end[];
 extern const unsigned char _binary_build_koom_kalwer_koom_start[],_binary_build_koom_kalwer_koom_end[];
 }
 namespace {
@@ -523,14 +521,23 @@ double bounded_setting(GKeyFile* file, const char* key, double fallback,
 }
 
 void load_settings() {
+    kalwer::game_assets::hash=[](const std::vector<unsigned char>& bytes){
+        auto* digest=g_compute_checksum_for_data(G_CHECKSUM_SHA256,bytes.data(),bytes.size());
+        std::string result=digest?digest:"";g_free(digest);return result;
+    };
+    kalwer::game_assets::download=[](const std::string& url,const std::filesystem::path& target){
+        gchar* curl=g_find_program_in_path("curl");if(!curl)return false;
+        std::string path=target.string(),ignored;
+        std::vector<std::string> arguments={curl,"--fail","--silent","--show-error","--location","--proto","=https","--proto-redir","=https","--connect-timeout","10","--max-time","180","--max-filesize","67108864","--output",path,url};
+        std::vector<gchar*> argv;for(auto& arg:arguments)argv.push_back(arg.data());argv.push_back(nullptr);
+        bool result=run_capture(argv.data(),ignored);g_free(curl);return result;
+    };
     kalwer::appearance.directory=std::filesystem::path(g_get_user_config_dir())/"kalwer";
     kalwer::appearance.load();
     kalwer::koom::install_bundle=[](const std::filesystem::path& dir){
         std::filesystem::create_directories(dir);
-        auto font=dir/"TimGM6mb.sf2";
-        if(!std::filesystem::exists(font) && !kalwer::koom::write_bundle_file(font,_binary_assets_koom_TimGM6mb_sf2_start,_binary_assets_koom_TimGM6mb_sf2_end-_binary_assets_koom_TimGM6mb_sf2_start))return false;
-        auto wad=dir/"freedoom2.wad";auto runtime=dir/"kalwer-koom";
-        if(!std::filesystem::exists(wad) && !kalwer::koom::write_bundle_file(wad,_binary_assets_koom_freedoom2_wad_start,_binary_assets_koom_freedoom2_wad_end-_binary_assets_koom_freedoom2_wad_start))return false;
+        if(!kalwer::game_assets::ensure(dir,kalwer::game_assets::freedoom) || !kalwer::game_assets::ensure(dir,kalwer::game_assets::soundfont))return false;
+        auto runtime=dir/"kalwer-koom";
         if(!kalwer::koom::write_bundle_file(runtime,_binary_build_koom_kalwer_koom_start,_binary_build_koom_kalwer_koom_end-_binary_build_koom_kalwer_koom_start))return false;
         std::filesystem::permissions(runtime,std::filesystem::perms::owner_read|std::filesystem::perms::owner_write|std::filesystem::perms::owner_exec);
         return true;

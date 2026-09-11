@@ -425,7 +425,9 @@ responses and police fines, with original programmatically drawn artwork.
 Race cash is separate from the permanent koin wallet: an arrest takes a quarter
 of the current race cash. Game time, police timers and input pause on focus loss.
 
-Koom includes Freedoom: Phase 2 and runs the separate bundled Doomgeneric helper
+Koom downloads and verifies Freedoom: Phase 2 and its music soundfont on first
+launch, then reuses the cached files offline. The large data files are not
+embedded in the launcher. Koom runs the separate bundled Doomgeneric helper
 inside the normal animated corner popup. No terminal window or external game
 window opens. Arrow keys move/turn; WASD moves/strafes; Space/Ctrl fires; E uses;
 1–7 changes weapons; Q opens the Doom menu. Escape closes the Kalwer popup and
@@ -476,3 +478,16 @@ External art and scene packs can replace the built-in fallback graphics; see
 [the art pack format](docs/kar-art.md). Commercial reference artwork is not
 included in the repository or release. Focus pause, permanent unlocks and daily
 trials continue to apply to both rendering paths.
+
+### First-use game data (v0.9.3)
+
+Kar's original sprite/scene packs and Koom's Freedoom/SoundFont data are hosted
+in the `game-data-v1` GitHub release and downloaded on game workers only when
+needed. The launcher contains pinned sizes and SHA-256 hashes; incomplete or
+modified downloads are rejected before installation. Cached data is reused
+without a network connection. Loading does not consume a daily game trial.
+`/kar-import <path to art.karp>` installs custom artwork; `/wad-import <path>`
+continues to install user-provided Doom-compatible data.
+
+Koom uses absolute frame deadlines and a small playback buffer, so rendering
+and pipe-transfer time no longer introduces regular audio gaps.
