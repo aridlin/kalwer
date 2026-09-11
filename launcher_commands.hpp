@@ -8,6 +8,7 @@ namespace kalwer {
 struct PopupDocument { std::string title, body; };
 struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
+    Command{"/kar-import", "Install Kar artwork: /kar-import <path to art.karp>", ""},
     Command{"/wad-import", "Install a Doom-compatible WAD: /wad-import <path>", ""},
     Command{"/games", "All games and permanent unlocks", ""},
     Command{"/tetris", "Falling blocks, line clears and ghost piece", ""},
@@ -44,7 +45,7 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     static const Command secret{"/doom","Koom",""};
     if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
-        for (const auto& command : commands) if (command.name.starts_with(prefix) || (command.name=="/wad-import" && prefix.starts_with("/wad-import "))) matches.push_back(&command);
+        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) matches.push_back(&command);
     return matches;
 }
 inline PopupDocument help() {

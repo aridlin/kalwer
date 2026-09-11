@@ -26,6 +26,8 @@ jobs:
           python3 koom/build.py
           g++ -std=c++20 -O1 -pthread tests/koom_runtime_test.cpp -o /tmp/koom-runtime-test
           /tmp/koom-runtime-test
+          g++ -std=c++20 -O1 -pthread tests/koom_pacing_test.cpp -o /tmp/koom-pacing-test
+          /tmp/koom-pacing-test
           python3 tests/koom_audio_test.py
   windows:
     runs-on: windows-latest

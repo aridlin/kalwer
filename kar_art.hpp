@@ -86,4 +86,25 @@ struct ArtRequest {
     }
     const Art* get()const{return ready.load(std::memory_order_acquire)?result.get():nullptr;}
 };
+inline std::string import_art(const std::filesystem::path& source,const std::filesystem::path& target){
+    try {
+        auto art=Art::load(source);
+        if(!art)return "Invalid or unreadable Kar art pack.";
+        auto scene=source;scene.replace_extension("kars");
+        if(std::filesystem::exists(scene) && art->scene.empty())return "Invalid or empty Kar scene pack.";
+        if(std::filesystem::exists(target/"art.karp") && std::filesystem::equivalent(source,target/"art.karp"))return "This pack is already installed. Reopen /kar.";
+        auto stage=target;stage+=".import";auto backup=target;backup+=".previous";
+        if(std::filesystem::exists(stage) || std::filesystem::exists(backup))return "A previous art import needs attention. Existing artwork was kept.";
+        std::filesystem::create_directories(stage);
+        try {
+            std::filesystem::copy_file(source,stage/"art.karp");
+            if(std::filesystem::exists(scene))std::filesystem::copy_file(scene,stage/"art.kars");
+            bool existed=std::filesystem::exists(target);
+            if(existed)std::filesystem::rename(target,backup);
+            try{std::filesystem::rename(stage,target);}catch(...){if(existed)std::filesystem::rename(backup,target);throw;}
+            std::error_code ec;if(existed)std::filesystem::remove_all(backup,ec);
+        }catch(...){std::error_code ec;std::filesystem::remove_all(stage,ec);throw;}
+        return "Kar artwork installed. Reopen /kar to use it.";
+    }catch(...){return "Could not install Kar artwork. Check the file path and permissions.";}
+}
 }

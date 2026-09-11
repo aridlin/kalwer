@@ -63,7 +63,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.9.2";
+constexpr const char* kKalwerVersion = "0.9.3";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2626,6 +2626,11 @@ void activate_selection(bool elevated = false) {
             open_popup({kalwer::games::name(kind), ""}, {}, kind);
             stop_query(); state.opening = state.closing = false;
             state.hidden_us = g_get_monotonic_time(); gtk_widget_hide(state.window);
+        }
+        else if(name=="/kar-import") {
+            std::string path=trim_copy(std::string(gtk_entry_get_text(GTK_ENTRY(state.entry))).substr(std::min<size_t>(11,std::strlen(gtk_entry_get_text(GTK_ENTRY(state.entry))))));
+            if(path.size()>1 && ((path.front()=='"' && path.back()=='"') || (path.front()=='\'' && path.back()=='\'')))path=path.substr(1,path.size()-2);
+            open_popup({"KAR ARTWORK",path.empty()?"Use /kar-import <path to art.karp>":kalwer::games::kar_pixels::import_art(kalwer::koom::utf8_path(path),kalwer::wallet.path.parent_path()/"kar")});
         }
         else if(name=="/wad-import") {
             std::string path=trim_copy(std::string(gtk_entry_get_text(GTK_ENTRY(state.entry))).substr(std::min<size_t>(11,std::strlen(gtk_entry_get_text(GTK_ENTRY(state.entry))))));

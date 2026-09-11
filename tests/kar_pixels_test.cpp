@@ -31,6 +31,14 @@ int main(){
  pack(2,true);assert(!kalwer::games::kar_pixels::Art::load(file));
  pack(0xffffffff,false);assert(!kalwer::games::kar_pixels::Art::load(file));
  pack(2,false);{std::ofstream out(file,std::ios::binary|std::ios::app);out.put('x');}assert(!kalwer::games::kar_pixels::Art::load(file));
+ auto destination=std::filesystem::temp_directory_path()/"kalwer-kar-import-test";
+ std::filesystem::remove_all(destination);
+ pack(2,false);assert(kalwer::games::kar_pixels::import_art(file,destination).starts_with("Kar artwork installed"));
+ assert(kalwer::games::kar_pixels::Art::load(destination/"art.karp"));
+ pack(2,true);assert(kalwer::games::kar_pixels::import_art(file,destination).starts_with("Invalid"));
+ assert(kalwer::games::kar_pixels::Art::load(destination/"art.karp"));
+ pack(2,false);assert(kalwer::games::kar_pixels::import_art(file,destination).starts_with("Kar artwork installed"));
+ std::filesystem::remove_all(destination);
  std::filesystem::remove(file);
  std::cout<<"Kar raster clipping, sprite transparency, mirroring, scaling and bitmap glyphs passed.\n";
 }

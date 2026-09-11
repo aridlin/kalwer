@@ -5,7 +5,11 @@ road geometry and scene primitives. The desktop GPU presents that frame using
 nearest-neighbor sampling. No Java runtime or game executable runs during play.
 The popup's animation, focus pause, wallet and daily trial remain host features.
 
-An external art pack can replace the built-in fallback graphics. Put `art.karp`
+An external art pack can replace the built-in fallback graphics. Run
+`/kar-import "path/to/art.karp"` to validate and install a pack and its adjacent
+`art.kars` scene on either desktop platform. Reopen Kar after importing.
+
+For manual installation, put `art.karp`
 and its optional `art.kars` scene alongside each other in the `kar` directory
 next to `koins-v1` in Kalwer's state directory. Reopen Kar after changing a pack.
 The pack loads on a worker so file reads do not delay the popup animation.

@@ -114,14 +114,20 @@ struct Session {
         input=fdopen(to_child[1],"wb");output=fdopen(from_child[0],"rb");
 #endif
         if(input)setvbuf(input,nullptr,_IONBF,0);
+        auto deadline=std::chrono::steady_clock::now();
         if(input && output)for(;;){
             std::array<unsigned char,256> pressed;
-            {std::unique_lock lock(mutex);wake.wait(lock,[&]{return stop || focused;});if(stop)break;pressed=keys;}
+            {std::unique_lock lock(mutex);if(!focused){wake.wait(lock,[&]{return stop || focused;});deadline=std::chrono::steady_clock::now();}if(stop)break;pressed=keys;}
+            // Rendering and pipe transfer belong inside the audio period.
+            // Sleeping a full period afterwards starves the playback device.
+            deadline+=std::chrono::milliseconds(29);
             if(fwrite(pressed.data(),1,pressed.size(),input)!=pressed.size())break;
             uint32_t header[4]{};if(fread(header,4,4,output)!=4 || header[0]!=0x4b4f4f4d || header[1]!=320 || header[2]!=200)break;
             std::vector<uint32_t> frame(320*200);if(fread(frame.data(),4,frame.size(),output)!=frame.size())break;
             {std::lock_guard lock(mutex);pixels=std::move(frame);++sequence;completed_maps=header[3];error.clear();}
-            std::unique_lock lock(mutex);wake.wait_for(lock,std::chrono::milliseconds(29),[&]{return stop;});if(stop)break;
+            auto now=std::chrono::steady_clock::now();
+            if(now-deadline>std::chrono::milliseconds(100))deadline=now;
+            std::unique_lock lock(mutex);wake.wait_until(lock,deadline,[&]{return stop || !focused;});if(stop)break;
         }
         if(input)fclose(input);
         if(output)fclose(output);

@@ -85,7 +85,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.9.2";
+constexpr wchar_t kKalwerVersion[] = L"0.9.3";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1891,6 +1891,11 @@ void activate_selection(bool elevated = false) {
             state.game_last = std::chrono::steady_clock::now();
             state.opening = state.closing = false;
             open_popup({kalwer::games::name(state.popup_game->kind), ""});
+        }
+        else if(name=="/kar-import") {
+            auto query=window_text(state.edit);auto path=trim_copy(query.substr(std::min<size_t>(11,query.size())));
+            if(path.size()>1 && path.front()==L'"' && path.back()==L'"')path=path.substr(1,path.size()-2);
+            open_popup({"KAR ARTWORK",path.empty()?"Use /kar-import <path to art.karp>":kalwer::games::kar_pixels::import_art(std::filesystem::path(path),kalwer::wallet.path.parent_path()/"kar")});
         }
         else if(name=="/wad-import") {
             auto query=window_text(state.edit);auto path=trim_copy(query.substr(std::min<size_t>(11,query.size())));
