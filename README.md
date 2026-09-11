@@ -233,7 +233,11 @@ and package-manager-owned installations. Linux replaces the verified executable
 on disk; Windows stages the verified executable. Both activate the update and
 relaunch automatically once the launcher is hidden and active commands finish,
 including background commands and administrator PTYs. No manual restart is needed.
-Checks run at startup, hourly, and when /updates is opened. Android uses the system APK installer.
+Checks run at startup, hourly, and when /updates is opened. On desktop, explicitly
+opening `/updates` also checks newer prereleases. Background checks retain the
+stable channel. Both the binary and checksum must be available before a release
+is selected; older versions and drafts are skipped. A pending update does not
+lose the manual prerelease request. Android uses the system APK installer.
 
 ### Run with elevated privileges
 
