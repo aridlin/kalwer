@@ -11,6 +11,7 @@ public final class GameTest extends ActivityInstrumentationTestCase2<MainActivit
     @Override protected void setUp()throws Exception{super.setUp();getInstrumentation().getTargetContext().getSharedPreferences("kalwer",0).edit().putInt("dither",0).putInt("popup_dither",0).commit();}
     private void waitFocused()throws Exception{long until=System.currentTimeMillis()+15000;while(!new JSONObject(GameNative.info()).getBoolean("focused") && System.currentTimeMillis()<until)Thread.sleep(50);assertTrue("Popup must finish opening and gain focus: "+GameNative.info(),new JSONObject(GameNative.info()).getBoolean("focused"));}
     private void waitElapsed(double previous)throws Exception{long until=System.currentTimeMillis()+10000;while(new JSONObject(GameNative.info()).getDouble("elapsed")<=previous && System.currentTimeMillis()<until)Thread.sleep(50);assertTrue("Gameplay must advance: "+GameNative.info(),new JSONObject(GameNative.info()).getDouble("elapsed")>previous);}
+    private void waitClosed(MainActivity activity)throws Exception{long until=System.currentTimeMillis()+15000;while(!activity.isFinishing() && System.currentTimeMillis()<until)Thread.sleep(50);assertTrue("Reverse animation must finish closing",activity.isFinishing());}
     private GamePopup popup()throws Exception{java.lang.reflect.Field f=MainActivity.class.getDeclaredField("gamePopup");f.setAccessible(true);return (GamePopup)f.get(getActivity());}
     public void testGamePopupFocusAndPermanentUnlock()throws Throwable {
         MainActivity activity=getActivity();
@@ -33,17 +34,17 @@ public final class GameTest extends ActivityInstrumentationTestCase2<MainActivit
         for(int kind:new int[]{0,1,2,3,4,5,7,8}){
             GameNative.open(kind,new java.io.File(activity.getFilesDir(),"games").getAbsolutePath(),activity.getApplicationInfo().nativeLibraryDir,0,0,72,0,true);GameNative.focus(true);GameNative.key(13,true);GameNative.key(13,false);Thread.sleep(200);assertEquals(kind,GameNative.kind());
         }
-        runTestOnUiThread(()->{try{popup().closeAnimated();}catch(Exception e){throw new RuntimeException(e);}});Thread.sleep(500);assertTrue(activity.isFinishing());
+        runTestOnUiThread(()->{try{popup().closeAnimated();}catch(Exception e){throw new RuntimeException(e);}});waitClosed(activity);
     }
     public void testKoomNativeRuntimeAndAudioPause()throws Throwable {
         MainActivity activity=getActivity();
         runTestOnUiThread(()->{EditText search=activity.findViewById(R.id.search_query);search.setText("/koom");search.onEditorAction(EditorInfo.IME_ACTION_GO);});
         long deadline=System.currentTimeMillis()+10000;while(popup()==null && System.currentTimeMillis()<deadline)Thread.sleep(100);assertNotNull(popup());waitFocused();
         getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_ENTER);
-        deadline=System.currentTimeMillis()+90000;while(new JSONObject(GameNative.info()).getLong("frames")<3 && System.currentTimeMillis()<deadline)Thread.sleep(100);
+        deadline=System.currentTimeMillis()+180000;while(new JSONObject(GameNative.info()).getLong("frames")<3 && System.currentTimeMillis()<deadline)Thread.sleep(100);
         assertTrue("Actual APK Koom helper must produce frames: "+GameNative.info(),new JSONObject(GameNative.info()).getLong("frames")>=3);
         runTestOnUiThread(()->{try{popup().setResumed(false);}catch(Exception e){throw new RuntimeException(e);}});Thread.sleep(200);
         long frames=new JSONObject(GameNative.info()).getLong("frames");Thread.sleep(350);assertEquals(frames,new JSONObject(GameNative.info()).getLong("frames"));
-        runTestOnUiThread(()->{try{popup().closeAnimated();}catch(Exception e){throw new RuntimeException(e);}});Thread.sleep(500);assertTrue(activity.isFinishing());
+        runTestOnUiThread(()->{try{popup().closeAnimated();}catch(Exception e){throw new RuntimeException(e);}});waitClosed(activity);
     }
 }

@@ -48,7 +48,7 @@ jobs:
         run: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=pl.aridlin.kalwer.GameTest
       - name: Collect device logs
         if: always()
-        run: adb logcat -d > /tmp/kalwer-android-logcat.txt || true
+        run: timeout 20 adb logcat -d > /tmp/kalwer-android-logcat.txt || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
