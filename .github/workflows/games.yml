@@ -81,6 +81,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\gpu-test.exe
           exit $LASTEXITCODE
+      - name: Download and verify game data through native Windows HTTP
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W3 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN tests\windows_game_data_test.cpp /Fe:windows-game-data-test.exe /link d3d11.lib d3dcompiler.lib dxgi.lib dcomp.lib d2d1.lib dwrite.lib windowscodecs.lib dwmapi.lib shell32.lib shlwapi.lib shcore.lib ole32.lib user32.lib gdi32.lib advapi32.lib winhttp.lib bcrypt.lib || exit /b 1
+          windows-game-data-test.exe
   koom-windows:
     runs-on: windows-latest
     steps:
