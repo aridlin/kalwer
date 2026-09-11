@@ -1,9 +1,13 @@
 #include "../games.hpp"
+#include "../launcher_commands.hpp"
 #include <cassert>
 #include <iostream>
 using namespace kalwer::games;
 void advance(Game& g,double seconds) { for(int i=0;i<int(seconds*240);++i) g.tick(1./240); }
 int main() {
+    assert(kalwer::matching_commands("/kar").front()->name=="/kar");
+    assert(kalwer::matching_commands("/config").front()->name=="/config");
+    assert(kalwer::matching_commands("/kar-import C:\\art.karp").front()->name=="/kar-import");
     for(auto kind:{Kind::snake,Kind::minesweeper,Kind::peggle}) {
         Game g(kind,42); auto snake=g.snake;
         g.key(' '); g.pointer(210,250,1); advance(g,20);

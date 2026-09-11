@@ -45,7 +45,10 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     static const Command secret{"/doom","Koom",""};
     if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
-        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) matches.push_back(&command);
+        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {
+            if(command.name==prefix)matches.insert(matches.begin(),&command);
+            else matches.push_back(&command);
+        }
     return matches;
 }
 inline PopupDocument help() {
