@@ -3044,6 +3044,7 @@ void open_multiline_editor(bool terminal) {
     if(!state.output_terminal || !state.output_content)return;
     GtkWidget* box=gtk_box_new(GTK_ORIENTATION_VERTICAL,3);multiline_editor=box;
     GtkWidget* hint=gtk_label_new("Enter: send · Shift+Enter: newline · Esc: draft");
+    gtk_label_set_ellipsize(GTK_LABEL(hint),PANGO_ELLIPSIZE_END);gtk_widget_set_tooltip_text(hint,"Enter: send · Shift+Enter: newline · Escape: keep draft");
     GtkWidget* scroll=gtk_scrolled_window_new(nullptr,nullptr);GtkWidget* view=gtk_text_view_new();
     gtk_widget_set_name(view,"kalwer-inline-input");style_inline_view(view,true);
     gtk_widget_set_size_request(scroll,-1,110);
