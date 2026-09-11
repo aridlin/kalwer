@@ -63,7 +63,7 @@ struct Game {
         mines.fill(0); revealed.fill(false); flagged.fill(false); cursor = 40;
         wrap=wallet.uses(0);aurora=wallet.uses(4);
         arcade.reset(random,wallet.uses(3));garden.reset(random(),wallet.uses(1));chess_game.reset(chess_game.local,wallet.uses(2));
-        tetris.reset(random());breakout.reset(random());kar.reset(random());if(kind==Kind::koom)koom.reset();
+        tetris.reset(random());breakout.reset(random());kar.reset(random());if(kind==Kind::kar && !wallet.path.empty())kar.load_art(wallet.path.parent_path()/"kar"/"art.karp");if(kind==Kind::koom)koom.reset();
         if(kind==Kind::shop || kind==Kind::catalog)started=true;
     }
     void spawn_food() {

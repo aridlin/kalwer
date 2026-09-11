@@ -1,9 +1,9 @@
 name: Native games
 on:
   push:
-    paths: ['game_trials.hpp', 'kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
+    paths: ['main.cpp', 'multiline_gtk.hpp', 'update_status.hpp', 'release_selection.hpp', 'game_trials.hpp', 'kar.hpp', 'kar_pixels.hpp', 'kar_art.hpp', 'tools/pack_kar_art.py', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   pull_request:
-    paths: ['game_trials.hpp', 'kar.hpp', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
+    paths: ['main.cpp', 'multiline_gtk.hpp', 'update_status.hpp', 'release_selection.hpp', 'game_trials.hpp', 'kar.hpp', 'kar_pixels.hpp', 'kar_art.hpp', 'tools/pack_kar_art.py', 'kar_course.hpp', 'kar_physics.hpp', 'tetris.hpp', 'breakout.hpp', 'calculator_format.hpp', 'passive_koins.hpp', 'koom.hpp', 'koom/**', 'latest_worker.hpp', 'chess.hpp', 'garden.hpp', 'shop.hpp', 'peggle.hpp', 'appearance.hpp', 'live_backdrop.hpp', 'gpu*.hpp', 'games*.hpp', 'windows/kalwer_windows.cpp', 'tests/*test.cpp', '.github/workflows/games.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,10 +13,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          for test in games peggle appearance chess garden shop latest_worker expansion kar_physics kar game_trials; do
+          for test in games peggle appearance chess garden shop latest_worker expansion release_selection kar_physics kar_pixels kar game_trials; do
             g++ -std=c++20 -O1 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/${test}_test.cpp -o /tmp/${test}-test
             /tmp/${test}-test
           done
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgtk-3-dev xvfb
+          g++ -std=c++20 -Wall -Wextra -Wpedantic tests/multiline_gtk_test.cpp $(pkg-config --cflags --libs gtk+-3.0) -o /tmp/multiline-gtk-test
+          xvfb-run /tmp/multiline-gtk-test
       - run: |
           python3 koom/build.py
           g++ -std=c++20 -O1 -pthread tests/koom_runtime_test.cpp -o /tmp/koom-runtime-test
@@ -39,6 +44,8 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 tests\shop_test.cpp /Fe:shop-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\game_trials_test.cpp /Fe:game-trials-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_test.cpp /Fe:kar-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\release_selection_test.cpp /Fe:release-selection-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\kar_pixels_test.cpp /Fe:kar-pixels-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_physics_test.cpp /Fe:kar-physics-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib || exit /b 1
       - run: |
@@ -61,6 +68,10 @@ jobs:
           .\game-trials-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\kar-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\release-selection-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\kar-pixels-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\kar-physics-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

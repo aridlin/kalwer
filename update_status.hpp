@@ -14,6 +14,7 @@ public:
         if (checking_) return false;
         checking_ = true; message_ = "Checking GitHub for updates…"; return true;
     }
+    bool checking() const { std::lock_guard lock(mutex_); return checking_; }
     void end_check() { std::lock_guard lock(mutex_); checking_ = false; }
     void set(std::string message) { std::lock_guard lock(mutex_); message_ = std::move(message); }
     std::string get() const { std::lock_guard lock(mutex_); return message_; }

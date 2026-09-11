@@ -42,8 +42,12 @@ application ID toggles the window without constructing a new GTK process.
 - Left/Right, Home/End, Shift-selection, and Ctrl+A/C/X/V edit the search text.
 - Enter launches the selected result.
 - Ctrl+Shift+Enter toggles a favourite and moves it into the pinned group.
-- Shift+Enter opens the multiline editor. Enter submits; Shift+Enter inserts a
-  newline. Escape keeps the draft. This also works in a running PTY session.
+- Shift+Enter inserts a newline in the launcher input. The search box grows up
+  to eight lines, then scrolls; selection, clipboard, undo and arrow-key editing
+  use native controls. Enter submits, and Ctrl+Up/Down selects results while
+  editing multiple lines. Multiline paste preserves line breaks. In a running
+  PTY, Shift+Enter opens an input area inside the same popup; Enter sends it and
+  Escape keeps the session draft.
 - Escape closes the launcher.
 - Mouse hover and click work on result rows.
 - Five on-screen rows are interactive. Mouse wheel, arrows, and Page Up/Down
@@ -454,3 +458,17 @@ press Enter/Space or click Play Trial. The popup title shows the time remaining.
 Only focused play uses time; loading, finished rounds and unfocused popups do
 not. Usage survives normal closes and restarts. When time runs out, the game
 pauses and its popup stays open. Permanent Koin purchases remove the limit.
+
+
+### Native Kar pixel renderer (v0.9.2)
+
+Kar now has a native 240×320 pixel renderer with bitmap text, sprite frames,
+scene geometry and textured surfaces. The GPU presents the frame with nearest
+sampling, and art loading runs off the popup thread. Windows recreates its
+frame bitmap when switching between Kar and Koom; Linux reuses the texture
+allocation between frames.
+
+External art and scene packs can replace the built-in fallback graphics; see
+[the art pack format](docs/kar-art.md). Commercial reference artwork is not
+included in the repository or release. Focus pause, permanent unlocks and daily
+trials continue to apply to both rendering paths.

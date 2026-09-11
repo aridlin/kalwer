@@ -1,6 +1,8 @@
 #pragma once
 #include "kar_physics.hpp"
 #include "kar_course.hpp"
+#include "kar_pixels.hpp"
+#include "kar_art.hpp"
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -30,6 +32,8 @@ struct Kar {
     int jump_height=0,jump_velocity=0;
     bool started=false,over=false,won=false,police_active=false;
     std::string notice;
+    std::shared_ptr<kar_pixels::ArtRequest> artwork;
+    void load_art(const std::filesystem::path& path){if(!artwork)artwork=kar_pixels::ArtRequest::start(path);}
     static int absolute(const Road& r){return (r.lap*segments+r.segment)*1024+r.offset;}
     static void place(Road& r,int distance,int lateral){
         int length=segments*1024;r.lap=distance/length;distance%=length;
@@ -218,7 +222,7 @@ struct Kar {
         double heading=steering.camera*6.283185307179586/2048.;
         double xx=x+lateral-road.lateral-std::sin(heading)*distance;
         double factor=180/std::max(250.,distance+1250);
-        return {120+xx*factor,142+(900-elevation*.35)*factor,1110*factor,factor};
+        return {120+xx*factor,190+(600-elevation*.35)*factor,1110*factor,factor};
     }
     template<class C>static void vehicle_art(C& p,double x,double y,double scale,unsigned color,int yaw=0,bool cop=false,bool front=false){
         double s=scale;auto r=[&](double a,double b,double w,double h,unsigned c){p.rect(x+a*s,y+b*s,w*s,h*s,c);};
@@ -254,11 +258,55 @@ struct Kar {
         p.line(x,y,x+h*.12,top,0x765c3d,std::max(1.,scale*13));
         for(int i=-2;i<=2;i++){double end=x+i*h*.25;p.line(x+h*.12,top,end,top+std::abs(i)*h*.09,0x337b45,std::max(1.,scale*19));}
     }
-    template<class P>void draw(P& output)const {
-        Canvas<P> p{output};const auto projected=view();
-        p.rect(0,0,240,320,0x82cce6);p.rect(0,113,240,40,0x5bbdc5);p.rect(0,146,240,174,0xd4ca87);
-        p.circle(191,72,15,0xfff2b5);
-        for(int i=0;i<20;i++){double x=i*14;double h=5+(i*13)%16;p.rect(x,137-h,14,h,0x5a967c);}
+    void draw_scene(kar_pixels::Surface& p,const kar_pixels::Art& art,const View& view)const{
+        for(int ahead=12;ahead>=0;--ahead){
+            int segment=(road.segment+ahead)%segments;
+            auto found=art.scene_segments.find(segment);if(found==art.scene_segments.end())continue;
+            for(size_t index:found->second){const auto& primitive=art.scene[index];std::array<Projected,3> points{};
+                int count=(primitive.kind==0 || primitive.kind==3)?3:2;
+                for(int vertex=0;vertex<count;++vertex){int at=vertex*3;
+                    int distance=primitive.vertices[at+1]-(road.segment*1024+road.offset);
+                    if(distance< -segments*512)distance+=segments*1024;
+                    if(distance>segments*512)distance-=segments*1024;
+                    points[vertex]=project(view,distance,primitive.vertices[at]);
+                    points[vertex].y-=primitive.vertices[at+2]*points[vertex].depth;
+                }
+                if(primitive.kind==3){
+                    auto sprite=art.get(primitive.bank,primitive.frame);if(!sprite)continue;
+                    std::array<double,6> uv{},xy{};int axis=0;
+                    if(primitive.vertices[0]==primitive.vertices[3] && primitive.vertices[3]==primitive.vertices[6])axis=1;
+                    int vertical=2;
+                    if(primitive.vertices[2]==primitive.vertices[5] && primitive.vertices[5]==primitive.vertices[8])vertical=1;
+                    double u0=std::min({primitive.vertices[axis],primitive.vertices[axis+3],primitive.vertices[axis+6]}),u1=std::max({primitive.vertices[axis],primitive.vertices[axis+3],primitive.vertices[axis+6]});
+                    double v0=std::min({primitive.vertices[vertical],primitive.vertices[vertical+3],primitive.vertices[vertical+6]}),v1=std::max({primitive.vertices[vertical],primitive.vertices[vertical+3],primitive.vertices[vertical+6]});
+                    for(int vertex=0;vertex<3;++vertex){xy[vertex*2]=points[vertex].x;xy[vertex*2+1]=points[vertex].y;uv[vertex*2]=(primitive.vertices[vertex*3+axis]-u0)/std::max(1.,u1-u0);uv[vertex*2+1]=1-(primitive.vertices[vertex*3+vertical]-v0)/std::max(1.,v1-v0);}
+                    p.textured_triangle(xy,uv,sprite->pixels.data(),sprite->width,sprite->height);
+                }else if(primitive.kind==0)p.triangle(points[0].x,points[0].y,points[1].x,points[1].y,points[2].x,points[2].y,primitive.color);
+                else{
+                    int x=int(std::floor(std::min(points[0].x,points[1].x))),y=int(std::floor(std::min(points[0].y,points[1].y)));
+                    int w=int(std::ceil(std::abs(points[1].x-points[0].x))),h=int(std::ceil(std::abs(points[1].y-points[0].y)));
+                    if(primitive.kind==1)p.rect(x,y,w,h,primitive.color);
+                    else if(auto sprite=art.get(primitive.bank,primitive.frame))p.sprite(sprite->pixels.data(),sprite->width,sprite->height,x,y,w,h);
+                }
+            }
+        }
+    }
+    void draw_race(kar_pixels::Surface& p)const {
+        const auto projected=view();
+        const auto* art=artwork?artwork->get():nullptr;
+        p.rect(0,0,240,320,0x50a9f2);p.rect(0,195,240,125,0x9dce83);
+        for(int y=80;y<170;++y){int mix=(y-80)/3;p.rect(0,y,240,1,unsigned((80+mix)<<16)|unsigned((169+mix)<<8)|242u);}
+        if(!art)p.circle(191,72,15,0xfff2b5);
+        for(int i=0;i<20;i++){double x=i*14;double h=5+(i*13)%16;if(!art)p.rect(x,197-h,14,h,0x5a967c);}
+        if(art){
+            // Background sheets wrap independently of the road; integer offsets
+            // preserve their original pixels during camera motion.
+            if(auto sky=art->get(2080,0))for(int x=-sky->width;x<240+sky->width;x+=sky->width)sky->draw(p,x-sky->x,80-sky->y);
+            if(auto panorama=art->get(2084,0)){
+                int scroll=-(road.segment*3+steering.camera/4)%panorama->width;
+                for(int x=scroll-panorama->width;x<240+panorama->width;x+=panorama->width)panorama->draw(p,x-panorama->x,202-panorama->height-panorama->y);
+            }
+        }
         // Road strips are projected from course geometry, with the same curve
         // coordinates used by physics and roadside objects.
         for(int strip=180;strip>=-2;--strip){
@@ -269,43 +317,92 @@ struct Kar {
                 double mix=std::clamp((yy-distant.y)/(close_point.y-distant.y),0.,1.);
                 double center=distant.x+(close_point.x-distant.x)*mix,half=distant.half+(close_point.half-distant.half)*mix,depth=distant.depth+(close_point.depth-distant.depth)*mix;
                 bool stripe=(int((absolute(road)+near_distance)/700)&1)!=0;
-                p.rect(0,yy,240,1,stripe?0xc5c485:0xd4ca87);
-                p.rect(center-half-5,yy,half*2+10,1,stripe?0xe7e5d1:0xc75a4a);
-                p.rect(center-half,yy,half*2,1,stripe?0x70767a:0x747a7d);
-                if(stripe)for(int lane:{-1,0,1})p.rect(center+lane*half*.5-depth*6,yy,std::max(1.,depth*12),1,0xe4e7db);
+                p.rect(0,yy,240,1,0x9dce83);
+                p.rect(center-half-depth*140,yy,half*2+depth*280,1,0xe5eee1);
+                int shade=std::clamp(32+(yy-150)/6,25,65);
+                p.rect(center-half,yy,half*2,1,unsigned((95-shade)<<16)|unsigned((161-shade)<<8)|unsigned(181-shade));
+                for(int x=std::max(0,int(center-half));x<std::min(240,int(center+half));++x){
+                    uint32_t hash=uint32_t(x*374761393u)^uint32_t((int(near_distance)+absolute(road))/32)*668265263u;hash=(hash^(hash>>13))*1274126177u;
+                    if((hash&7)==0){int value=int((hash>>8)&7)-3;auto& pixel=p.pixels[yy*240+x];int r=int((pixel>>16)&255)+value,g=int((pixel>>8)&255)+value,b=int(pixel&255)+value;pixel=0xff000000u|unsigned(r<<16)|unsigned(g<<8)|unsigned(b);}
+                }
+                for(int sign:{-1,1})p.rect(center+sign*depth*22-depth*8,yy,std::max(1.,depth*16),1,0xfff2a1);
+                if(stripe)for(int lane:{-1,1})p.rect(center+lane*half*.5-depth*6,yy,std::max(1.,depth*12),1,0xe4f1ed);
             }
         }
-        for(int i=28;i>=1;--i){
+        if(art && !art->scene.empty())draw_scene(p,*art,projected);
+        for(int i=28;i>=1 && (!art || art->scene.empty());--i){
             double distance=i*1400-std::fmod(double(absolute(road)),1400.);auto q=project(projected,distance);
+            if(art){
+                double scale=q.depth*8;
+                unsigned bank=i%4==0?3042:3007;
+                int frame=bank==3007?0:(absolute(road)/1400+i)%3;
+                if(auto sprite=art->get(bank,frame)){
+                    int center=int((sprite->x+sprite->width*.5)*scale),bottom=int((sprite->y+sprite->height)*scale);
+                    sprite->draw(p,int(q.x-q.half-q.depth*550)-center,int(q.y)-bottom,scale);
+                    sprite->draw(p,int(q.x+q.half+q.depth*650)-center,int(q.y)-bottom,scale);
+                }
+                continue;
+            }
             if(i%3==0){palm(p,q.x-q.half-q.depth*550,q.y,q.depth);palm(p,q.x+q.half+q.depth*650,q.y,q.depth);}
             if(i%4==0){double x=q.x+q.half+q.depth*500,w=q.depth*1000,h=q.depth*1800;p.rect(x,q.y-h,w,h,0xeee1bf);p.rect(x,q.y-h,w,3*q.depth*30,0xbb7658);for(int j=0;j<3;j++)p.rect(x+w*(j+.2)/3,q.y-h*.7,w*.12,h*.25,0x68909b);}
         }
-        for(size_t i=0;i<kar_course::pickups.size();++i){const auto& pick=kar_course::pickups[i];if(picked[i]==road.lap)continue;Road at{pick.segment,0,road.lap,pick.lateral};int distance=at.gap_to(road,segments);if(distance<100 || distance>16000)continue;auto q=project(projected,distance,pick.lateral);if(q.x<8 || q.x>225)continue;double size=std::clamp(q.depth*110,4.,16.);p.text(q.x-size*.4,q.y,size,pick.kind==0?"N":"$",pick.kind==0?0x55eeff:0xffeb61);}
+        for(size_t i=0;i<kar_course::pickups.size();++i){const auto& pick=kar_course::pickups[i];if(picked[i]==road.lap)continue;Road at{pick.segment,0,road.lap,pick.lateral};int distance=at.gap_to(road,segments);if(distance<100 || distance>16000)continue;auto q=project(projected,distance,pick.lateral);if(q.x<8 || q.x>225)continue;double size=std::clamp(q.depth*110,4.,16.);if(art){art->draw(p,pick.kind==0?3010:3009,pick.kind==0?int(elapsed*8)%2:0,int(q.x),int(q.y),std::clamp(q.depth*6,.08,1.));continue;}p.text(q.x-size*.4,q.y,size,pick.kind==0?"N":"$",pick.kind==0?0x55eeff:0xffeb61);}
         for(const auto& block:roadblocks){if(!block.active)continue;int gap=absolute(block.road)-absolute(road);if(gap<0 || gap>20000)continue;auto q=project(projected,gap,block.road.lateral);double w=q.depth*720,h=q.depth*240;p.rect(q.x-w/2,q.y-h,w,h,0xe0e4df);for(int i=0;i<5;i++)p.rect(q.x-w/2+w*i/5,q.y-h,w/10,h,0xe76e3f);p.circle(q.x-w*.3,q.y-h*1.25,std::max(1.,h*.12),0xffae34);p.circle(q.x+w*.3,q.y-h*1.25,std::max(1.,h*.12),0xffae34);}
         std::array<int,12> order{};for(int i=0;i<12;i++)order[i]=i;
         std::sort(order.begin(),order.end(),[&](int a,int b){return racers[a].road.gap_to(road,segments)>racers[b].road.gap_to(road,segments);});
         constexpr unsigned colors[]={0x5795bd,0xd75543,0xd2b45a,0x778994,0x8b6faf,0xe8e9df,0x628966};
-        for(int i:order){const auto& r=racers[i];if(r.police && !police_active)continue;int gap=r.road.gap_to(road,segments);if(gap<0 || gap>16000 || r.impact.wrecked)continue;auto q=project(projected,gap,r.road.lateral);if(q.x<20 || q.x>220)continue;vehicle_art(p,q.x,q.y,std::min(1.1,q.depth*9),colors[i%7],0,r.police,r.oncoming);}
+        for(int i:order){const auto& r=racers[i];if(r.police && !police_active)continue;int gap=r.road.gap_to(road,segments);if(gap<0 || gap>16000 || r.impact.wrecked)continue;auto q=project(projected,gap,r.road.lateral);if(q.x<20 || q.x>220)continue;if(art){unsigned bank=r.police?2019:r.traffic?2011:2017;art->draw(p,bank,r.oncoming?0:2,int(q.x),int(q.y),std::min(1.1,q.depth*9));}
+            else vehicle_art(p,q.x,q.y,std::min(1.1,q.depth*9),colors[i%7],0,r.police,r.oncoming);}
         if(motion.stage>0){p.line(101,286,97,308,0x91ecff,5);p.line(139,286,143,308,0x91ecff,5);}
         if(steering.drift){p.line(91,283,80-steering.drift*8,312,0x596264,2);p.line(145,283,146-steering.drift*8,312,0x596264,2);}
-        if(invulnerable<=0 || int(elapsed*12)%2==0)vehicle_art(p,120,282-std::min(70,jump_height),1,0x689fbd,(steering.body-steering.camera)/28);
+        if(invulnerable<=0 || int(elapsed*12)%2==0){
+            int yaw=std::clamp((steering.body-steering.camera)/28,-4,4),y=282-std::min(70,jump_height);
+            if(art){art->draw(p,2005,yaw+78,120,y);if(phase==Phase::busted)art->draw(p,2095,0,120,y);art->draw(p,1,yaw+4,120,y);art->draw(p,2,(4-std::abs(yaw))*2+(int(elapsed*20)&1),120,y,1,yaw>0);}
+            else vehicle_art(p,120,y,1,0x689fbd,yaw);
+        }
+        if(art){
+            art->text(p,2102,std::to_string(position),3,3);art->text(p,2100,"/8",31,6);
+            art->draw(p,1056,1,88,35);art->text(p,2101,std::to_string(std::clamp(road.lap,1,3))+"/3",104,5);
+            art->text(p,2100,std::to_string(score)+" $",199,7);
+            art->draw(p,1055,6,0,319);art->draw(p,1055,7,240,319);
+            p.rect(23,311,68.*motion.nitro/(150*unit),3,motion.stage==4?0xffa4f1:0x5bdefb);
+            art->text(p,2101,std::to_string(motion.kph()),143,302);art->text(p,2100,"KM/H",207,312);
+            art->text(p,2100,std::to_string(std::clamp(motion.kph()/50+1,1,6)),210,299);
+            double angle=-2.5+std::clamp(motion.kph()/320.,0.,1.)*2.5;
+            p.line(211,320,211+std::cos(angle)*23,320+std::sin(angle)*23,0xfff4fc,1);
+            if(heat>0){for(int i=0;i<5;i++)p.rect(188+i*9,25,6,3,heat>i*20?0xff6784:0x254e83);}
+        }else{
         p.text(5,19,21,std::to_string(position),0xffe560);p.text(24,16,11,"/8",0x233e49);
         p.rect(96,2,48,19,0x256477);p.text(104,16,12,std::to_string(std::clamp(road.lap,1,3))+" / 3",0xe9f4d9);
         p.text(166,14,10,std::to_string(score)+" $",0xffe560);p.text(181,34,9,"WANTED",heat>=70?0xffd34c:0x213d47);
         for(int i=0;i<5;i++)p.rect(168+i*2,26,1.5,8,heat>=20*(i+1)?0xec623c:0x456473);
         p.rect(48,305,144,12,0x1c3c4a);p.rect(50,307,140.*motion.nitro/(150*unit),8,motion.stage==4?0xffd85e:0x4dbbea);
         p.text(183,304,20,std::to_string(motion.kph()),0xffe363);p.text(188,318,8,"KM/H",0xe4f4e9);
-        if(notice_time>0 && phase!=Phase::busted)p.text(36,87,14,notice,0xffec8c);
+        }
+        if(notice_time>0 && phase!=Phase::busted){
+            if(art)art->text(p,2101,notice,std::max(3,120-int(notice.size())*6),78);
+            else p.text(36,87,14,notice,0xffec8c);
+        }
         if(phase==Phase::ready){p.rect(16,83,208,78,0x174757);p.text(78,104,22,"KAR",0xe7f6e8);p.text(30,124,11,"BAHAMAS  /  THREE LAPS",0x9ddcf1);p.text(29,141,10,"C: vehicle  "+std::to_string(kar_physics::vehicles[vehicle].maximum)+" km/h",0xe7f6e8);p.text(49,154,10,"ENTER / SPACE TO RACE",0xffdc71);}
         if(phase==Phase::countdown)p.text(105,118,42,std::to_string(std::max(1,int(std::ceil(phase_time)))),0xffe166);
         if(phase==Phase::busted){
-            p.rect(16,71,208,172,0x163947);p.rect(16,71,104,7,0xec4e58);p.rect(120,71,104,7,0x4e9bee);
-            p.circle(120,126,22,0xc69470);p.rect(91,100,58,12,0x213044);p.rect(99,90,42,16,0x293d58);p.rect(115,94,10,8,0xecc56c);
-            p.rect(97,118,20,6,0x172731);p.rect(123,118,20,6,0x172731);p.line(117,120,123,120,0x172731,2);
-            p.rect(88,147,64,49,0x2d4b6c);p.rect(113,146,14,49,0x233449);p.circle(102,160,5,0xf2ca6a);
-            p.text(70,214,21,"BUSTED",0xffcf70);p.text(44,232,11,"FINE: 25% OF RACE CASH",0xdceadf);
+            p.rect(26,66,188,2,0x54dfff);p.rect(26,99,188,2,0xf285d9);
+            if(art){art->text(p,2101,"BUSTED",83,73);art->text(p,2100,"FINE $"+std::to_string(score/4),77,94);}
+            else{p.text(83,88,9,"BUSTED",0xffcf70);p.text(77,109,9,"FINE $"+std::to_string(score/4),0xffffff);}
         }
         if(over){p.rect(19,94,202,78,0x164655);p.text(39,116,19,won?"PODIUM FINISH!":"RACE COMPLETE",0xffdf77);p.text(47,140,13,"POSITION "+std::to_string(position)+" / 8",0xe8f3df);p.text(45,159,11,"R TO RACE AGAIN",0x92d7ef);}
+    }
+    mutable kar_pixels::Surface framebuffer;
+    template<class P>void draw(P& output)const {
+        draw_race(framebuffer);
+        if constexpr(requires{output.image(57,38,306,408,framebuffer.pixels.data(),240,320);}){
+            output.image(57,38,306,408,framebuffer.pixels.data(),240,320);
+        }else{
+            // Diagnostic painters still see the same raster, never a different
+            // vector implementation. Merge same-colored runs for compact output.
+            Canvas<P> canvas{output};
+            for(int y=0;y<320;++y)for(int x=0;x<240;){int end=x+1;auto color=framebuffer.pixels[y*240+x];while(end<240 && framebuffer.pixels[y*240+end]==color)++end;canvas.rect(x,y,end-x,1,color&0xffffff);x=end;}
+        }
         output.text(15,467,10,"Arrows/WASD: drive  Space/Up: nitro  Down+steer: drift",0x8dada1);
     }
 };
