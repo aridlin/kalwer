@@ -13,7 +13,14 @@ int main(){
  using namespace kalwer;using namespace kalwer::games;
  auto root=std::filesystem::temp_directory_path()/"kalwer-kar-test-data";std::filesystem::create_directories(root);wallet.path=root/"wallet";wallet.balance=100000;wallet.owned=wallet.equipped=0;
  assert(wallet.purchase(7,12000));Game game(Kind::kar,42);Paint painter;
- game.focus(true);game.key(13);game.release(13);assert(game.started);
+ game.focus(true);game.key(13);game.release(13);assert(!game.started);
+ game.tick(10);assert(!game.started && game.kar.elapsed==0);
+ // Physics tests use an in-memory art fixture; production first-use loading
+ // must block race progress until its worker supplies verified artwork.
+ game.kar.artwork=std::make_shared<kar_pixels::ArtRequest>();
+ game.kar.artwork->result=std::make_shared<kar_pixels::Art>();
+ game.kar.artwork->ready.store(true);
+ game.key(13);game.release(13);assert(game.started);
  for(int i=0;i<600;i++)game.tick(.02);
  assert(game.kar.motion.speed>0);
  auto before=game.kar.road;game.key(2);game.focus(false);game.tick(60);game.key(1);
