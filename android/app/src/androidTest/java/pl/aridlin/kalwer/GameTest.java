@@ -8,6 +8,7 @@ import org.json.JSONObject;
 @SuppressWarnings("deprecation")
 public final class GameTest extends ActivityInstrumentationTestCase2<MainActivity> {
     public GameTest(){super(MainActivity.class);}
+    @Override protected void setUp()throws Exception{super.setUp();getInstrumentation().getTargetContext().getSharedPreferences("kalwer",0).edit().putInt("dither",0).putInt("popup_dither",0).commit();}
     private GamePopup popup()throws Exception{java.lang.reflect.Field f=MainActivity.class.getDeclaredField("gamePopup");f.setAccessible(true);return (GamePopup)f.get(getActivity());}
     public void testGamePopupFocusAndPermanentUnlock()throws Throwable {
         MainActivity activity=getActivity();
