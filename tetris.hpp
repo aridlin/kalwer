@@ -9,6 +9,7 @@ struct Tetris {
     std::array<int,7> bag{};int bag_pos=7;
     std::mt19937 random;
     int piece=0,next=0,rotation=0,x=3,y=0,score=0,lines=0;
+    bool hold_enabled=false,slow_gravity=false,held_this_drop=false;int held=-1;
     bool started=false,over=false,won=false;double clock=0;
     static constexpr unsigned colors[]={0x8bdcff,0xffd579,0xef9fe8,0x8ce9b3,0xff8179,0x839fff,0xffa657};
     static constexpr const char* shapes[]={"....XXXX........",".XX..XX.........",".X..XXX.........",".XX.XX..........","XX...XX.........","X...XXX.........","..X.XXX........."};
@@ -26,8 +27,8 @@ struct Tetris {
         }return true;
     }
     int take(){if(bag_pos==7){for(int i=0;i<7;i++)bag[i]=i;std::shuffle(bag.begin(),bag.end(),random);bag_pos=0;}return bag[bag_pos++];}
-    void spawn(){piece=next;next=take();rotation=0;x=3;y=0;clock=0;if(!fits(x,y,rotation))over=true;}
-    void reset(unsigned seed){random.seed(seed);board.fill(0);bag_pos=7;score=lines=0;clock=0;started=over=won=false;next=take();spawn();}
+    void spawn(){held_this_drop=false;piece=next;next=take();rotation=0;x=3;y=0;clock=0;if(!fits(x,y,rotation))over=true;}
+    void reset(unsigned seed){held=-1;held_this_drop=false;random.seed(seed);board.fill(0);bag_pos=7;score=lines=0;clock=0;started=over=won=false;next=take();spawn();}
     void lock(){
         for(int cy=0;cy<4;cy++)for(int cx=0;cx<4;cx++)if(cell(piece,rotation,cx,cy)) {if(y+cy<0){over=true;return;}board[(y+cy)*10+x+cx]=piece+1;}
         int cleared=0;
@@ -39,13 +40,18 @@ struct Tetris {
         if(lines>=40){over=won=true;return;}spawn();
     }
     void key(int k){if(over)return;started=true;
+        if(k=='c' && hold_enabled && !held_this_drop){
+            int current=piece;
+            if(held<0)spawn();else{piece=held;rotation=0;x=3;y=0;clock=0;if(!fits(x,y,rotation))over=true;}
+            held=current;held_this_drop=true;return;
+        }
         if(k==1 || k=='a'){if(fits(x-1,y,rotation))x--;}
         if(k==2 || k=='d'){if(fits(x+1,y,rotation))x++;}
         if(k==4 || k=='s'){if(fits(x,y+1,rotation)){y++;score++;}else lock();}
         if(k==3 || k=='w' || k=='x' || k=='z'){int r=(rotation+(k=='z'?3:1))%4;for(int dx:{0,-1,1,-2,2})if(fits(x+dx,y,r)){x+=dx;rotation=r;break;}}
         if(k==' '){while(fits(x,y+1,rotation)){y++;score+=2;}lock();}
     }
-    void advance(double dt){if(!started || over)return;clock+=dt;double step=std::max(.08,.7-.13*(lines/10));while(clock>=step && !over){clock-=step;if(fits(x,y+1,rotation))y++;else lock();}}
+    void advance(double dt){if(!started || over)return;clock+=dt;double step=std::max(.08,.7-.13*(lines/10))*(slow_gravity?1.25:1.);while(clock>=step && !over){clock-=step;if(fits(x,y+1,rotation))y++;else lock();}}
     template<class P>void draw(P& p)const {
         p.rect(24,42,220,400,0x112e29);
         for(int row=0;row<20;row++)for(int col=0;col<10;col++)if(int c=board[row*10+col])p.rect(25+col*22,43+row*20,20,18,colors[c-1]);
@@ -60,6 +66,7 @@ struct Tetris {
         p.text(266,248,16,"Lines "+std::to_string(lines)+"/40",0x8ce9b3);
         p.text(266,281,16,"Level "+std::to_string(1+lines/10),0xffd579);
         p.text(263,337,11,"Up / X: rotate",0x8dada1);p.text(263,360,11,"Z: rotate back",0x8dada1);
+        if(hold_enabled){p.text(266,305,11,held<0?"C: HOLD (empty)":std::string("C: HOLD ")+"IOTSZJL"[held],0xffd579);}
         p.text(263,383,11,"Space: hard drop",0x8dada1);p.text(24,466,11,"Arrows / WASD   Space: drop",0x8dada1);
     }
 };

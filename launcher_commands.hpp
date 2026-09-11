@@ -43,6 +43,8 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     for (auto& c : prefix) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
     std::vector<const Command*> matches;
     static const Command secret{"/doom","Koom",""};
+    static const Command unlock{"/unlockall","Unlock games",""};
+    if(prefix=="/unlockall"){matches.push_back(&unlock);return matches;}
     if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
         for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {

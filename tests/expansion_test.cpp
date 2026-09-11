@@ -16,7 +16,7 @@ int main(){
  g.focused=false;auto x=g.breakout.ball_x;g.tick(1);assert(g.breakout.ball_x==x);
  assert(calculator::grouped("-1234567.123456") == "-1'234'567.123456");assert(calculator::grouped("1.234e-123") == "1.234e-123");assert(calculator::grouped("12345 / 6789") == "12'345 / 6'789");assert(calculator::scientific(123456789000000.) == "1.23456789e14");assert(calculator::scientific(1e-14) == "1e-14");assert(calculator::number(1e-20)!="0");
  balance=wallet.balance;calculator_completed("1000+20");calculator_completed("1000+20");assert(wallet.balance==balance+1);
- Shop shop;shop.selected=6;balance=wallet.balance;shop.pointer(50,390,1);assert(shop.selected==6 && wallet.balance==balance);
+ Shop shop;shop.selected=16;balance=wallet.balance;shop.pointer(50,390,1);assert(shop.selected==16 && wallet.balance==balance);
  std::ofstream(dir/"bad.wad",std::ios::binary)<<"IWAD";assert(!koom::valid_wad(dir/"bad.wad"));assert(koom::valid_wad("assets/koom/freedoom2.wad"));
  std::filesystem::remove_all(dir);std::cout<<"Expansion rules, rewards, focus, calculator and WAD validation passed.\n";
 }

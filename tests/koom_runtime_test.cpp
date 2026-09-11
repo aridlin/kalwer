@@ -11,11 +11,11 @@ int main(){
  session->input(true,keys);auto until=std::chrono::steady_clock::now()+std::chrono::seconds(15);bool got=false;
  while(std::chrono::steady_clock::now()<until){{std::lock_guard lock(session->mutex);if(session->sequence>=3){assert(session->pixels.size()==64000);got=true;break;}}std::this_thread::sleep_for(std::chrono::milliseconds(10));}assert(got);
  koom::Game game;game.session=session;wallet.balance=wallet.wins=0;{std::lock_guard lock(session->mutex);session->completed_maps=1;}
- game.focus(true);game.focus(true);assert(wallet.balance==100 && wallet.wins==1);game.session.reset();
+ game.focus(true);game.focus(true);assert(wallet.balance==100 && wallet.wins==1);game.bounty=true;{std::lock_guard lock(session->mutex);session->completed_maps=2;}game.focus(true);game.focus(true);assert(wallet.balance==225 && wallet.wins==2);game.session.reset();
  // Expiring the daily trial must pause the actual helper and audio, not just
  // cover its still-running framebuffer with a launcher overlay.
  wallet.owned=0;games::Game trial(games::Kind::koom,42);trial.trial_active=true;
- trial.koom.session=session;trial.koom.rewarded_maps=1;
+ trial.koom.session=session;trial.koom.rewarded_maps=2;
  assert(game_trials.begin(3));game_trials.consume(3,599.99);trial.focus(true);trial.tick(.02);
  assert(!trial.playable() && !trial.trial_active);
  std::this_thread::sleep_for(std::chrono::milliseconds(100));uint64_t paused;{std::lock_guard lock(session->mutex);paused=session->sequence;}

@@ -85,7 +85,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.9.4";
+constexpr wchar_t kKalwerVersion[] = L"0.9.5";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1908,6 +1908,7 @@ void activate_selection(bool elevated = false) {
             if(path.size()>1 && path.front()==L'"' && path.back()==L'"')path=path.substr(1,path.size()-2);
             open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(std::filesystem::path(path))});
         }
+        else if (name == "/unlockall") {open_popup({"GAMES",kalwer::wallet.unlock_games()?"All games are unlocked.":"Could not save unlocks. Nothing changed."});}
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") {bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored.":"No readable preset found."});}

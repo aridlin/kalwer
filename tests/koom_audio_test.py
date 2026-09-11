@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory(prefix='kalwer-koom-audio-zażółć-') as fold
         command = [str(helper), '-iwad', str(root / 'assets/koom/freedoom2.wad'),
                    '-soundfont', str(root / 'assets/koom/TimGM6mb.sf2'),
                    '-config', str(Path(folder) / 'doom.cfg'), '-file', str(patch), '-warp', '1', '-skill', '2', '-nomonsters']
+        if music:
+            command += ['-kalwer-fieldkit']
         if not music:
             command += ['-nomusic']
         with open(Path(folder) / 'runtime.log', 'wb') as log:
@@ -41,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix='kalwer-koom-audio-zażółć-') as fold
                 if child.poll() is None:
                     child.kill()
                     child.wait()
+        kit_log = (Path(folder) / 'runtime.log').read_text(errors='replace')
+        assert kit_log.count('Kalwer field kit: health 150, armor 150, map 1:1') == (1 if music else 0), kit_log[-3000:]
         samples = array.array('f')
         samples.frombytes(pcm.read_bytes())
         assert len(samples) == frames * 1392 * 2
