@@ -222,16 +222,31 @@ struct Kar {
     }
     template<class C>static void vehicle_art(C& p,double x,double y,double scale,unsigned color,int yaw=0,bool cop=false,bool front=false){
         double s=scale;auto r=[&](double a,double b,double w,double h,unsigned c){p.rect(x+a*s,y+b*s,w*s,h*s,c);};
-        r(-32,-1,64,7,0x273335);r(-29,-28,9,30,0x172023);r(20,-28,9,30,0x172023);
-        // Layered body panels, glass, lights and wheel arches at the phone scale.
-        for(int row=0;row<30;row++){double t=row/29.,half=19+9*t,shift=yaw*(1-t)*2;r(-half+shift,-45+row,half*2,1.1,row<4?0xbdd5dc:color);}
-        r(-27,-19,54,17,color);r(-28,-6,56,5,0x3e525c);r(-24,-42,48,3,0x9cb9ce);
-        r(-18+yaw,-38,36,16,0x203b4c);r(-16+yaw,-37,14,12,0x7498a6);r(0+yaw,-37,16,12,0x526f7c);
-        r(-21,-21,42,2,0xa4c6d1);r(-26,-17,11,6,front?0xfff8c1:0xd63d43);r(15,-17,11,6,front?0xfff8c1:0xd63d43);
-        r(-25,-16,8,2,front?0xffffff:0xffa179);r(17,-16,8,2,front?0xffffff:0xffa179);
-        r(-11,-11,22,6,0xcbd8d3);r(-8,-9,16,2,0x344755);r(-26,-4,52,2,0x8fa0a5);
-        r(-33,-31,8,4,color);r(25,-31,8,4,color);
-        if(cop){r(-25,-19,50,9,0xe5e9e4);r(-17,-43,17,4,0xff354d);r(0,-43,17,4,0x388bff);}
+        auto shade=[&](unsigned c,int percent){unsigned out=0;for(int shift:{0,8,16})out|=unsigned(std::clamp(int((c>>shift)&255)*percent/100,0,255))<<shift;return out;};
+        // Wide low sports-car silhouette: separate roof, sloping glass, rear
+        // deck, wheel arches and diffuser. Yaw shifts the upper body in depth.
+        yaw=std::clamp(yaw,-5,5);
+        for(int row=0;row<7;row++){double half=36*std::sqrt(std::max(0.,1-std::pow((row-3)/4.,2)));r(-half,row-2,half*2,1.1,0x39413f);}
+        r(-32,-22,8,25,0x142027);r(24,-22,8,25,0x142027);
+        for(int row=0;row<35;row++){
+            double half=row<8?17+row*.85:row<20?24+(row-8)*.7:32-(row-20)*.12;
+            double shift=yaw*(1-row/35.)*1.8;
+            r(-half+shift,-39+row,half*2,1.1,shade(color,row<7?120:row<20?108:row<25?88:68));
+        }
+        for(int row=0;row<12;row++){double half=17+row*.45,shift=yaw*(1-row/16.);r(-half+shift,-32+row,half*2,1.1,row<3?0x90bccd:row<7?0x436d83:0x253f51);}
+        r(-16+yaw,-35,32,2,shade(color,145));
+        for(int row=0;row<5;row++)r(-25+row,-19+row,50-row*2,1.1,shade(color,125-row*7));
+        r(-32,-19,8,7,shade(color,72));r(24,-19,8,7,shade(color,65));
+        r(-29,-15,17,5,front?0xeaf7ff:0xaa263b);r(12,-15,17,5,front?0xeaf7ff:0xaa263b);
+        r(-28,-14,15,2,front?0xffffff:0xff7370);r(13,-14,15,2,front?0xffffff:0xff7370);
+        r(-29,-6,58,4,0x26343d);r(-21,-5,42,4,0x101c24);
+        for(int i=-2;i<=2;i++)r(i*6,-5,1,5,0x4c5c63);
+        r(-9,-12,18,5,0xc6d0c9);r(-6,-10,12,1,0x344755);
+        r(-27,-4,5,2,0xa3b4bd);r(22,-4,5,2,0xa3b4bd);
+        r(-34,-24,6,3,shade(color,110));r(28,-24,6,3,shade(color,110));
+        if(!front && !cop){r(-27,-20,3,5,0x35434e);r(24,-20,3,5,0x35434e);r(-31,-22,62,3,shade(color,132));}
+        if(cop){r(-27,-15,54,8,0xe5e9e4);r(-16+yaw,-39,16,4,0xff354d);r(yaw,-39,16,4,0x388bff);}
+
     }
     template<class C>void palm(C& p,double x,double y,double scale)const {
         if(scale<.03 || x<12 || x>228)return;
