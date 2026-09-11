@@ -36,6 +36,7 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 /O2 tests\chess_test.cpp /Fe:chess-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 /O2 tests\garden_test.cpp /Fe:garden-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\shop_test.cpp /Fe:shop-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\kar_physics_test.cpp /Fe:kar-physics-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\gpu_windows_test.cpp /Fe:gpu-test.exe /link d3d11.lib d3dcompiler.lib user32.lib gdi32.lib || exit /b 1
       - run: |
           .\windows-ui-test.exe
@@ -53,6 +54,8 @@ jobs:
           .\garden-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\shop-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\kar-physics-test.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           .\gpu-test.exe
           exit $LASTEXITCODE
