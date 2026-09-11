@@ -1,3 +1,5 @@
+#include "../passive_koins.hpp"
+#include "../calculator_format.hpp"
 #include "../latest_worker.hpp"
 #include "../system_file_index.hpp"
 #include "../launcher_commands.hpp"
@@ -46,6 +48,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <deque>
+#include <condition_variable>
 #include <unordered_map>
 #include <utility>
 #include <map>
@@ -79,7 +83,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.8.2";
+constexpr wchar_t kKalwerVersion[] = L"0.9.1";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -488,7 +492,13 @@ struct AppEntry {
     bool pinned = false;
 };
 
+struct TemporaryCommandFile {
+    std::filesystem::path path;
+    ~TemporaryCommandFile(){if(!path.empty()){std::error_code ec;std::filesystem::remove(path,ec);}}
+};
+
 struct CommandJob {
+    TemporaryCommandFile script;
     std::uint64_t id = 0;
     std::wstring command;
     HPCON pseudo_console = nullptr;
@@ -497,10 +507,16 @@ struct CommandJob {
     HANDLE process = nullptr;
     HANDLE process_thread = nullptr;
     std::thread reader;
+    std::thread writer;
+    std::mutex input_mutex;
+    std::condition_variable input_wake;
+    std::deque<std::string> pending_input;
+    bool input_stopped=false;
     std::thread waiter;
     std::mutex output_mutex;
     std::string output;
     std::atomic<bool> running{true};
+    std::atomic<bool> reaped{false};
     std::atomic<DWORD> exit_code{STILL_ACTIVE};
     bool background = false;
     bool interacted = false;
@@ -843,6 +859,16 @@ std::uint32_t bounded_unsigned(const std::string& value, std::uint32_t fallback,
 }
 
 void load_settings() {
+    kalwer::koom::install_bundle=[](const std::filesystem::path& dir){
+        std::filesystem::create_directories(dir);
+        for(int id:{201,202,203}) {
+            auto path=dir/(id==201?"freedoom2.wad":id==202?"kalwer-koom.exe":"TimGM6mb.sf2");if(id!=202 && std::filesystem::exists(path))continue;
+            auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(id),RT_RCDATA);if(!resource)return false;
+            auto loaded=LoadResource(nullptr,resource);if(!loaded)return false;
+            if(!kalwer::koom::write_bundle_file(path,LockResource(loaded),SizeofResource(nullptr,resource)))return false;
+        }return true;
+    };
+
     kalwer::appearance.directory=local_data_directory();kalwer::appearance.load();
     kalwer::wallet.path=local_data_directory()/L"koins-v1";kalwer::wallet.load();
     std::ifstream input(local_data_directory() / L"settings-v1.ini", std::ios::binary);
@@ -1012,12 +1038,7 @@ private:
     bool saw_operator_ = false;
 };
 
-std::wstring format_number(double value) {
-    if (std::abs(value) < 5e-14) value = 0.0;
-    std::wostringstream stream;
-    stream << std::setprecision(12) << std::defaultfloat << value;
-    return stream.str();
-}
+std::wstring format_number(double value) { return wide(kalwer::calculator::number(value)); }
 
 bool simple_integer_fraction(const std::wstring& source, long long& numerator,
                              long long& denominator) {
@@ -1082,7 +1103,7 @@ bool approximate_fraction(double value, long long& numerator, long long& denomin
 
 AppEntry calculator_entry(const std::wstring& value, const std::wstring& label) {
     AppEntry result;
-    result.title = value;
+    result.title = wide(kalwer::calculator::grouped(utf8(value)));
     result.subtitle = label + L" · ENTER TO COPY";
     result.link = L"::calculator";
     result.payload = value;
@@ -1132,6 +1153,8 @@ std::vector<AppEntry> calculator_results(const std::wstring& query) {
     } else {
         results.push_back(calculator_entry(format_number(value), L"CALCULATED RESULT"));
     }
+    if(auto scientific=kalwer::calculator::scientific(value); !scientific.empty()) results.push_back(calculator_entry(wide(scientific), L"SCIENTIFIC"));
+
     return results;
 }
 
@@ -1426,6 +1449,19 @@ void read_job_output(CommandJob* job) {
     }
 }
 
+void write_queued_job_input(CommandJob* job) {
+    for(;;){
+        std::string input;
+        {std::unique_lock lock(job->input_mutex);job->input_wake.wait(lock,[&]{return job->input_stopped || !job->pending_input.empty();});if(job->input_stopped)return;input=std::move(job->pending_input.front());job->pending_input.pop_front();}
+        size_t offset=0;
+        while(offset<input.size()){
+            DWORD written=0;
+            if(!WriteFile(job->input_write,input.data()+offset,static_cast<DWORD>(std::min<size_t>(4096,input.size()-offset)),&written,nullptr) || written==0)return;
+            offset+=written;
+        }
+    }
+}
+
 void wait_for_job(CommandJob* job) {
     WaitForSingleObject(job->process, INFINITE);
     DWORD exit_code = 1;
@@ -1442,7 +1478,11 @@ void wait_for_job(CommandJob* job) {
         ClosePseudoConsole(job->pseudo_console);
         job->pseudo_console = nullptr;
     }
+    {std::lock_guard lock(job->input_mutex);job->input_stopped=true;job->pending_input.clear();}
+    job->input_wake.notify_one();
+    if(job->writer.joinable())job->writer.join();
     if (job->reader.joinable()) job->reader.join();
+    job->reaped.store(true);
     PostMessageW(state.window, kCommandChangedMessage,
                  static_cast<WPARAM>(job->id), 1);
 }
@@ -1452,6 +1492,19 @@ std::unique_ptr<CommandJob> create_command_job(const std::wstring& command) {
     auto job = std::make_unique<CommandJob>();
     job->id = ++state.next_job_id;
     job->command = command;
+    std::wstring shell_command=command;
+    if(command.find_first_of(L"\r\n")!=std::wstring::npos) {
+        wchar_t folder[MAX_PATH+1]{},file[MAX_PATH+1]{};
+        if(!GetTempPathW(MAX_PATH,folder) || !GetTempFileNameW(folder,L"klw",0,file))return {};
+        job->script.path=file;
+        auto batch=job->script.path;batch+=L".cmd";
+        std::error_code ec;std::filesystem::rename(job->script.path,batch,ec);if(ec)return {};
+        job->script.path=batch;
+        std::ofstream out(batch,std::ios::binary);
+        out<<"@echo off\r\nchcp 65001 >nul\r\n";
+        auto body=utf8(command);for(size_t i=0;i<body.size();i++){if(body[i]=='\n' && (i==0 || body[i-1]!='\r'))out<<'\r';out<<body[i];}out<<"\r\n";out.close();if(!out)return {};
+        shell_command=L"\"\""+batch.wstring()+L"\"\"";
+    }
 
     HANDLE input_read = nullptr;
     HANDLE output_write = nullptr;
@@ -1497,9 +1550,13 @@ std::unique_ptr<CommandJob> create_command_job(const std::wstring& command) {
     // neither output nor input reached Kalwer. The pseudoconsole is the window,
     // so it must be created with the same flags used by Microsoft's ConPTY path.
     std::wstring command_line = L"\"" + std::wstring(command_processor) +
-        L"\" /d /q /c " + command;
+        L"\" /d /q /c " + shell_command;
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
+    // Explicit null standard handles let ConPTY establish its own streams.
+    // Otherwise Windows can duplicate a parent's redirected console handles
+    // even with bInheritHandles=FALSE (for example when launched from a shell).
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
     const BOOL created = CreateProcessW(nullptr, command_line.data(), nullptr, nullptr,
@@ -1515,23 +1572,23 @@ std::unique_ptr<CommandJob> create_command_job(const std::wstring& command) {
     }
     job->process = process.hProcess;
     job->process_thread = process.hThread;
+    job->writer = std::thread(write_queued_job_input,job.get());
     job->reader = std::thread(read_job_output, job.get());
     job->waiter = std::thread(wait_for_job, job.get());
     return job;
 }
 
-void copy_text_to_clipboard(const std::wstring& text) {
-    if (!OpenClipboard(state.window)) return;
-    EmptyClipboard();
-    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (memory) {
-        void* destination = GlobalLock(memory);
-        std::memcpy(destination, text.c_str(), bytes);
-        GlobalUnlock(memory);
-        SetClipboardData(CF_UNICODETEXT, memory);
+bool copy_text_to_clipboard(const std::wstring& text) {
+    if(!OpenClipboard(state.window))return false;
+    bool copied=false;const size_t bytes=(text.size()+1)*sizeof(wchar_t);
+    if(HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE,bytes)) {
+        if(void* destination=GlobalLock(memory)) {
+            std::memcpy(destination,text.c_str(),bytes);GlobalUnlock(memory);
+            if(EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,memory))copied=true;
+        }
+        if(!copied)GlobalFree(memory);
     }
-    CloseClipboard();
+    CloseClipboard();return copied;
 }
 
 std::wstring clipboard_text() {
@@ -1595,8 +1652,8 @@ void write_job_input(const char* data, DWORD size) {
     if (!state.popup_job || !state.popup_job->running.load() ||
         !state.popup_job->input_write) return;
     state.popup_job->interacted = true;
-    DWORD written = 0;
-    WriteFile(state.popup_job->input_write, data, size, &written, nullptr);
+    {std::lock_guard lock(state.popup_job->input_mutex);if(state.popup_job->input_stopped)return;state.popup_job->pending_input.emplace_back(data,size);}
+    state.popup_job->input_wake.notify_one();
 }
 
 void copy_job_output() {
@@ -1624,7 +1681,7 @@ void close_popup(bool background, bool terminate) {
         static_cast<float>(state.popup_line_ms + 170 + state.popup_expand_ms));
     state.popup_closed_at = std::chrono::steady_clock::now();
     state.popup_closing = true;
-    if (state.popup_game) state.popup_game->focused = false;
+    if (state.popup_game) {state.popup_game->focus(false);}
     state.popup_selecting = false; state.popup_pressed = PopupButton::none;
     ReleaseCapture();
     CommandJob* job = state.popup_job;
@@ -1817,10 +1874,15 @@ void activate_selection(bool elevated = false) {
         const auto name = utf8(result.payload);
         if (kalwer::games::is_command(name)) {
             state.popup_game = std::make_unique<kalwer::games::Game>(kalwer::games::command_kind(name));
-            state.popup_game->focused = GetForegroundWindow() == state.window;
+            state.popup_game->focus(GetForegroundWindow() == state.window);
             state.game_last = std::chrono::steady_clock::now();
             state.opening = state.closing = false;
             open_popup({kalwer::games::name(state.popup_game->kind), ""});
+        }
+        else if(name=="/wad-import") {
+            auto query=window_text(state.edit);auto path=trim_copy(query.substr(std::min<size_t>(11,query.size())));
+            if(path.size()>1 && path.front()==L'"' && path.back()==L'"')path=path.substr(1,path.size()-2);
+            open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(std::filesystem::path(path))});
         }
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
@@ -1849,7 +1911,7 @@ void activate_selection(bool elevated = false) {
     }
     if (result.link == L"::settings") { open_settings_popup(); return; }
     if (result.link == L"::calculator") {
-        copy_text_to_clipboard(result.payload.empty() ? result.title : result.payload);
+        if(copy_text_to_clipboard(result.payload.empty() ? result.title : result.payload))kalwer::calculator_completed(utf8(window_text(state.edit)));
     } else if (result.link == L"::google") {
         const std::wstring url = L"https://www.google.com/search?q=" +
                                  url_encode(result.subtitle);
@@ -1875,6 +1937,7 @@ void activate_selection(bool elevated = false) {
         return;
     } else {
         if (!launch_application(result, elevated)) return;
+        kalwer::wallet.credit(window_text(state.edit).starts_with(L":")?1:2,false);
     }
     hide_launcher();
 }
@@ -2649,6 +2712,15 @@ float popup_animation_progress() {
 }
 
 struct GamePainter {
+    void image(double x,double y,double w,double h,const uint32_t* pixels,int width,int height) {
+        static ComPtr<ID2D1Bitmap1> bitmap;static ID2D1DeviceContext* owner=nullptr;
+        if(owner!=state.render.d2d_context.Get()){bitmap.Reset();owner=state.render.d2d_context.Get();}
+        const auto properties=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
+        if(!bitmap)state.render.d2d_context->CreateBitmap(D2D1::SizeU(width,height),pixels,width*4,&properties,bitmap.GetAddressOf());
+        else bitmap->CopyFromMemory(nullptr,pixels,width*4);
+        if(bitmap)state.render.d2d_context->DrawBitmap(bitmap.Get(),D2D1::RectF(x,y,x+w,y+h),1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    }
+
     void tint(unsigned c) { set_brush(color(((c>>16)&255)/255.f,((c>>8)&255)/255.f,(c&255)/255.f)); }
     void rect(double x,double y,double w,double h,unsigned c) {
         if(c==0x081a18)return;
@@ -2730,7 +2802,7 @@ void draw_command_popup() {
     render.d2d_context->SetTransform(
         D2D1::Matrix3x2F::Scale(1.0f, unfold,
                               D2D1::Point2F(0.0f, panel_top)) * transform);
-    std::wstring title = state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
+    std::wstring title = state.popup_game ? wide(state.popup_game->title()) : state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
@@ -3034,9 +3106,57 @@ void cleanup_jobs() {
     }
 }
 
+HWND multiline_window=nullptr,multiline_edit=nullptr;
+WNDPROC multiline_edit_proc=nullptr;
+std::uint64_t multiline_job_id=0,terminal_draft_job_id=0;
+std::wstring terminal_multiline_draft;
+void finish_multiline(bool submit,bool elevated=false) {
+    if(!multiline_window)return;
+    auto text=window_text(multiline_edit);bool terminal=multiline_job_id!=0;
+    if(terminal){
+        terminal_draft_job_id=multiline_job_id;terminal_multiline_draft=text;
+        if(submit && state.popup_job && state.popup_job->id==multiline_job_id && state.popup_job->running.load()){
+            auto source=utf8(text);std::string input;
+            for(size_t i=0;i<source.size();i++){if(source[i]=='\n'){if(i==0 || source[i-1]!='\r')input+='\r';}else input+=source[i];}
+            input+='\r';write_job_input(input.data(),static_cast<DWORD>(input.size()));terminal_multiline_draft.clear();
+        }
+    }else{SetWindowTextW(state.edit,text.c_str());SendMessageW(state.edit,EM_SETSEL,text.size(),text.size());}
+    DestroyWindow(multiline_window);multiline_job_id=0;
+    if(submit && !terminal)activate_selection(elevated);
+    else if(terminal && state.popup_open){SetForegroundWindow(state.window);SetFocus(state.edit);}
+}
+LRESULT CALLBACK multiline_input_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
+    if(message==WM_KEYDOWN && wparam==VK_ESCAPE){finish_multiline(false);return 0;}
+    if(message==WM_KEYDOWN && wparam==VK_RETURN && !(GetKeyState(VK_SHIFT)&0x8000)){finish_multiline(true,(GetKeyState(VK_CONTROL)&0x8000)!=0);return 0;}
+    return CallWindowProcW(multiline_edit_proc,window,message,wparam,lparam);
+}
+LRESULT CALLBACK multiline_window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
+    if(message==WM_CLOSE){finish_multiline(false);return 0;}
+    if(message==WM_DESTROY){multiline_window=multiline_edit=nullptr;return 0;}
+    if(message==WM_SIZE && multiline_edit){MoveWindow(multiline_edit,12,40,LOWORD(lparam)-24,HIWORD(lparam)-52,TRUE);return 0;}
+    return DefWindowProcW(window,message,wparam,lparam);
+}
+void open_multiline_editor(bool terminal=false) {
+    if(multiline_window){SetForegroundWindow(multiline_window);return;}
+    WNDCLASSW cls{};cls.hInstance=state.instance;cls.lpfnWndProc=multiline_window_proc;cls.lpszClassName=L"KalwerMultilineInput";cls.hCursor=LoadCursorW(nullptr,IDC_IBEAM);cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);RegisterClassW(&cls);
+    multiline_job_id=terminal && state.popup_job?state.popup_job->id:0;
+    auto text=terminal?(multiline_job_id==terminal_draft_job_id?terminal_multiline_draft:L""):window_text(state.edit);DWORD begin=0,end=0;
+    if(!terminal){SendMessageW(state.edit,EM_GETSEL,reinterpret_cast<WPARAM>(&begin),reinterpret_cast<LPARAM>(&end));text.replace(begin,end-begin,L"\r\n");begin+=2;}else begin=static_cast<DWORD>(text.size());
+    multiline_window=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"Kalwer multiline input",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,660,380,nullptr,nullptr,state.instance,nullptr);
+    if(!multiline_window)return;
+    HWND label=CreateWindowExW(0,L"STATIC",L"Enter: submit   Shift+Enter: newline   Escape: keep draft",WS_CHILD|WS_VISIBLE,12,10,620,24,multiline_window,nullptr,state.instance,nullptr);
+    multiline_edit=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",text.c_str(),WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,12,40,620,285,multiline_window,nullptr,state.instance,nullptr);
+    SendMessageW(label,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);SendMessageW(multiline_edit,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(ANSI_FIXED_FONT)),TRUE);
+    SendMessageW(multiline_edit,EM_SETLIMITTEXT,1024*1024,0);SendMessageW(multiline_edit,EM_SETSEL,begin,begin);
+    multiline_edit_proc=reinterpret_cast<WNDPROC>(SetWindowLongPtrW(multiline_edit,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(multiline_input_proc)));
+    if(!terminal)hide_launcher();
+    ShowWindow(multiline_window,SW_SHOW);SetForegroundWindow(multiline_window);SetFocus(multiline_edit);
+}
+
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (state.popup_closing && (message == WM_KEYDOWN || message == WM_CHAR || message == WM_PASTE)) return 0;
     if (state.popup_game) {
+        if(message==WM_KEYUP){int k=wparam==VK_LEFT?1:wparam==VK_RIGHT?2:wparam==VK_UP?3:wparam==VK_DOWN?4:wparam>='A' && wparam<='Z'?int(wparam-'A'+'a'):int(wparam);state.popup_game->release(k);return 0;}
         if (message == WM_KEYDOWN) {
             if (wparam == VK_ESCAPE) close_popup(false, false);
             else {
@@ -3063,6 +3183,7 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             state.popup_job->interacted = true;
             const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if(wparam==VK_RETURN && shift){state.suppress_popup_launch_char=true;open_multiline_editor(true);return 0;}
             if (control) {
                 if (wparam == 'A') {
                     const std::wstring output = popup_output_text();
@@ -3131,7 +3252,8 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             case VK_NEXT: move_selection(kSelectableResults); return 0;
             case VK_ESCAPE: hide_launcher(); return 0;
             case VK_RETURN:
-                if (GetKeyState(VK_SHIFT) & 0x8000) toggle_favorite();
+                if ((GetKeyState(VK_SHIFT)&0x8000) && (GetKeyState(VK_CONTROL)&0x8000))toggle_favorite();
+                else if(GetKeyState(VK_SHIFT)&0x8000)open_multiline_editor();
                 else activate_selection((GetKeyState(VK_CONTROL) & 0x8000) != 0);
                 return 0;
             case VK_TAB: {
@@ -3224,7 +3346,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 if (state.popup_game) { state.popup_game.reset(); finish_hide_launcher(); position_and_resize(); return 0; }
                 position_and_resize(); hide_launcher();
             }
-            if (update_ready && elevated_command.empty() && !state.visible && !state.popup_open && !state.settings_window &&
+            if (update_ready && elevated_command.empty() && !state.visible && !state.popup_open && !state.settings_window && !multiline_window &&
                 !FindWindowW(kWindowClass, kAdminWindowTitle) &&
                 std::none_of(state.jobs.begin(), state.jobs.end(), [](const auto& job) { return job->running.load(); })) {
                 update_ready = false;
@@ -3437,7 +3559,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             break;
         case WM_ACTIVATE:
             if (state.popup_game) {
-                state.popup_game->focused = LOWORD(wparam) != WA_INACTIVE && !state.popup_closing;
+                state.popup_game->focus(LOWORD(wparam) != WA_INACTIVE && !state.popup_closing);
                 state.game_last=std::chrono::steady_clock::now(); state.render_dirty=true;
             }
             if (LOWORD(wparam) != WA_INACTIVE) SetFocus(state.edit);
@@ -3456,6 +3578,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         }
         case WM_DESTROY:
+            if(multiline_window) DestroyWindow(multiline_window);
             if(state.settings_window) DestroyWindow(state.settings_window);
             if (state.hotkey_registered) UnregisterHotKey(window, kHotkeyId);
             cleanup_jobs();

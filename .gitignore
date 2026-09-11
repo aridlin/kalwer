@@ -4,3 +4,8 @@
 /vendor/sqlite/*.o
 
 /protocols/*.o
+
+/build-koom/
+/build-koom-windows/
+
+__pycache__/

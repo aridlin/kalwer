@@ -7,6 +7,11 @@ on:
         required: true
         default: v0.5.1
         type: string
+      cloud_validation:
+        description: Also require a working Defender MAPS cloud connection
+        required: true
+        default: true
+        type: boolean
 permissions:
   contents: read
 jobs:
@@ -23,4 +28,11 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ matrix.release }}
-        run: ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG -RequireRealtime -RequireCloud
+          REQUIRE_CLOUD: ${{ inputs.cloud_validation }}
+        run: |
+          if ($env:REQUIRE_CLOUD -eq 'true') {
+            ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG -RequireRealtime -RequireCloud
+          } else {
+            Write-Output 'Checking updated Defender on-demand scanning with real-time protection. MAPS cloud validation is not included in this run.'
+            ./windows/scan-release.ps1 -ReleaseTag $env:RELEASE_TAG -RequireRealtime
+          }

@@ -22,7 +22,7 @@ comes from the finished launcher below it.
 - Firefox Google search mode and a native precedence-aware calculator.
 - Warm resident process with three-second query and selection restoration.
 - GitHub release updates on Linux and Windows with a post-update banner.
-- Five native popup games, a permanent koin wallet, and optional minigame unlocks.
+- Nine desktop popup games, a permanent koin wallet, and optional minigame unlocks.
 
 ## Build and run
 
@@ -41,8 +41,9 @@ application ID toggles the window without constructing a new GTK process.
 - Up/Down or Ctrl+P/Ctrl+N moves the selection.
 - Left/Right, Home/End, Shift-selection, and Ctrl+A/C/X/V edit the search text.
 - Enter launches the selected result.
-- Shift+Enter persistently favourites or unfavourites an Elephant result and
-  immediately moves the pinned group to the top.
+- Ctrl+Shift+Enter toggles a favourite and moves it into the pinned group.
+- Shift+Enter opens the multiline editor. Enter submits; Shift+Enter inserts a
+  newline. Escape keeps the draft. This also works in a running PTY session.
 - Escape closes the launcher.
 - Mouse hover and click work on result rows.
 - Five on-screen rows are interactive. Mouse wheel, arrows, and Page Up/Down
@@ -395,3 +396,61 @@ are discarded. Shell icons load on a separate worker, with only bitmap uploads
 and drawing on the UI thread. Updated result lists slide in over 160 ms.
 `/settings` and `/config` open a separate settings popup with checkboxes,
 dropdowns and numeric controls, keyboard navigation and automatic saving.
+
+
+## Desktop arcade expansion (v0.9.0)
+
+`/games` opens the game catalog. Four additional games can be permanently
+unlocked in `/shop` using koins earned inside Kalwer. There are no real-money
+purchases. Existing upgrade toggles remain available; purchased games remain
+unlocked and retries cost nothing.
+
+| Game | Unlock | Controls and rewards |
+| --- | ---: | --- |
+| Tetris | 6,000 | Arrows/WASD move and rotate, Z rotates backwards, Space drops. Clear 40 lines; speed increases with level. Runs earn up to 250 koins from lines and score. |
+| Breakout | 8,000 | Mouse or arrows move the paddle; click/Space serves. Three brick boards, three lives, up to 250 koins per run. |
+| Kar | 12,000 | C chooses a car before starting, Enter/Space starts, arrows/WASD steer and brake, Space/Up activates nitro. Three laps, traffic, drift cash, police pursuits and roadblocks. Podium finishes earn koins. |
+| Koom | 25,000 | Freedoom with native Doom-compatible gameplay, music and sound effects. Completed maps earn 100 koins. |
+
+Kar uses native C++ fixed-point movement, course geometry, staged nitro, impact
+responses and police fines, with original programmatically drawn artwork.
+Race cash is separate from the permanent koin wallet: an arrest takes a quarter
+of the current race cash. Game time, police timers and input pause on focus loss.
+
+Koom includes Freedoom: Phase 2 and runs the separate bundled Doomgeneric helper
+inside the normal animated corner popup. No terminal window or external game
+window opens. Arrow keys move/turn; WASD moves/strafes; Space/Ctrl fires; E uses;
+1–7 changes weapons; Q opens the Doom menu. Escape closes the Kalwer popup and
+R returns to WAD selection. Music and game simulation stop advancing unfocused.
+
+Use `/wad-import "path/to/game.wad"` to validate and copy a user-provided IWAD or
+PWAD into Kalwer's data directory. Left/Right selects an installed WAD; Tab
+chooses its base IWAD when loading a PWAD; Enter starts. Commercial game data is
+user-provided. Compatibility follows the bundled classic Doom engine, so mods
+requiring other source-port extensions are not supported. Third-party licenses
+and the freely distributable soundfont are documented in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Normal launcher use also earns small rewards: a successful application launch
+adds 2 koins, opening a file result adds 1, and copying a calculator result adds
+1. Re-copying the same calculator query during the same launcher session does
+not award again. Typing and searching never award koins. Balances stay in game
+and shop title bars and `/koins`, outside the search bar.
+
+Calculator results group integer digits with apostrophes, such as
+`1'234'567.89`. Large and small values also have a scientific representation;
+copying keeps a plain reusable number. Decimal, fraction, mixed-number and
+percentage forms remain available.
+
+Mobile minigames follow completion of the desktop release; this desktop update
+does not add games to the existing Android app.
+
+
+### Daily game trials (v0.9.1)
+
+Each locked game—Tetris, Breakout, Kar and Koom—has its own free 10-minute
+allowance every local calendar day. Open it from `/games` or its command and
+press Enter/Space or click Play Trial. The popup title shows the time remaining.
+Only focused play uses time; loading, finished rounds and unfocused popups do
+not. Usage survives normal closes and restarts. When time runs out, the game
+pauses and its popup stays open. Permanent Koin purchases remove the limit.
