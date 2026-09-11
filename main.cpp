@@ -1531,7 +1531,7 @@ double output_elapsed_ms() {
 void close_output_and_kalwer() {
     if (!state.output_window) { hide_kalwer(); return; }
     if (state.output_closing) return;
-    if (state.output_game) kalwer::games::canvas_game(state.output_game)->focused = false;
+    if (state.output_game) kalwer::games::canvas_game(state.output_game)->focus(false);
     state.output_close_origin = std::min(output_elapsed_ms(),
         state.popup_line_ms + 170.0 + state.popup_expand_ms);
     if (state.output_content) {
@@ -1691,7 +1691,7 @@ gboolean on_output_key(GtkWidget*, GdkEventKey* event, gpointer) {
     }
     if (state.output_game) {
         if (state.output_closing) return TRUE;
-        int k=event->keyval==GDK_KEY_Left?1:event->keyval==GDK_KEY_Right?2:event->keyval==GDK_KEY_Up?3:event->keyval==GDK_KEY_Down?4:event->keyval==GDK_KEY_Return?13:gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
+        int k=event->keyval==GDK_KEY_Left?1:event->keyval==GDK_KEY_Right?2:event->keyval==GDK_KEY_Up?3:event->keyval==GDK_KEY_Down?4:event->keyval==GDK_KEY_Return?13:event->keyval==GDK_KEY_Control_L || event->keyval==GDK_KEY_Control_R?17:gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
         kalwer::games::canvas_game(state.output_game)->key(k);
         gtk_widget_queue_draw(state.output_game); return TRUE;
     }
@@ -1860,7 +1860,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
         state.output_canvas=state.output_game;gtk_container_add(GTK_CONTAINER(state.output_window),state.output_game);
         g_signal_connect(state.output_window,"key-release-event",G_CALLBACK(+[](GtkWidget*,GdkEventKey* event,gpointer)->gboolean {
         if(!state.output_game)return FALSE;
-        int k=event->keyval==GDK_KEY_Left?1:event->keyval==GDK_KEY_Right?2:event->keyval==GDK_KEY_Up?3:event->keyval==GDK_KEY_Down?4:event->keyval==GDK_KEY_Return?13:gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
+        int k=event->keyval==GDK_KEY_Left?1:event->keyval==GDK_KEY_Right?2:event->keyval==GDK_KEY_Up?3:event->keyval==GDK_KEY_Down?4:event->keyval==GDK_KEY_Return?13:event->keyval==GDK_KEY_Control_L || event->keyval==GDK_KEY_Control_R?17:gdk_keyval_to_unicode(gdk_keyval_to_lower(event->keyval));
         kalwer::games::canvas_game(state.output_game)->release(k);return TRUE;
     }),nullptr);
     g_signal_connect(state.output_window,"key-press-event",G_CALLBACK(on_output_key),nullptr);
