@@ -1,3 +1,4 @@
+#include "../release_selection.hpp"
 #include "../passive_koins.hpp"
 #include "../calculator_format.hpp"
 #include "../latest_worker.hpp"
@@ -68,8 +69,9 @@ constexpr int kExpandedLogicalWidth = kLogicalWidth + kPopupLogicalWidth;
 constexpr float kSearchX = 15.0f;
 constexpr float kSearchY = 12.0f;
 constexpr float kSearchWidth = 620.0f;
-constexpr float kSearchHeight = 66.0f;
-constexpr float kResultsY = 88.0f;
+float input_extra_height=0;
+float search_height() { return 66.0f+input_extra_height; }
+float results_y() { return 88.0f+input_extra_height; }
 constexpr float kResultX = 25.0f;
 constexpr float kResultWidth = 600.0f;
 constexpr float kRowHeight = 58.0f;
@@ -83,7 +85,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.9.1";
+constexpr wchar_t kKalwerVersion[] = L"0.9.2";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -159,30 +161,8 @@ std::filesystem::path executable_path() {
     return std::filesystem::path(std::wstring(buffer.data(), length));
 }
 
-std::vector<int> version_parts(const std::wstring& version) {
-    std::vector<int> parts;
-    std::size_t cursor = 0;
-    while (cursor < version.size()) {
-        while (cursor < version.size() && !std::iswdigit(version[cursor])) ++cursor;
-        if (cursor >= version.size()) break;
-        wchar_t* end = nullptr;
-        const long value = std::wcstol(version.c_str() + cursor, &end, 10);
-        if (!end || end == version.c_str() + cursor) break;
-        parts.push_back(static_cast<int>(std::min<long>(value, 1000000)));
-        cursor = static_cast<std::size_t>(end - version.c_str());
-        if (cursor < version.size() && version[cursor] != L'.') break;
-        ++cursor;
-    }
-    return parts;
-}
-
 bool version_is_newer(const std::wstring& candidate, const std::wstring& current) {
-    std::vector<int> left = version_parts(candidate);
-    std::vector<int> right = version_parts(current);
-    const std::size_t count = std::max(left.size(), right.size());
-    left.resize(count);
-    right.resize(count);
-    return left > right;
+    return kalwer::updates::newer(utf8(candidate),utf8(current));
 }
 
 bool http_get(const std::wstring& url, std::vector<std::uint8_t>* body,
@@ -316,7 +296,7 @@ std::atomic<bool> update_failed_on_launch{false};
 std::atomic<bool> update_ready{false};
 void announce_update(const std::string& message) { update_status.set(message); }
 
-void check_for_update() {
+void check_for_update(bool include_prereleases=false) {
     if (update_failed_on_launch) { update_status.set("The update could not be applied. Run /updates to retry."); return; }
     if (running_under_wine()) { update_status.set("Automatic updates are disabled under Wine."); return; }
     const std::filesystem::path target = executable_path();
@@ -324,9 +304,21 @@ void check_for_update() {
     std::filesystem::path pending = target;
     pending += L".update.exe";
     std::error_code error;
+    std::string comparison_version=utf8(kKalwerVersion);
+    const auto pending_version_path=std::filesystem::path(pending.wstring()+L".version");
     if (std::filesystem::exists(pending, error)) {
         if (updated_on_launch) { update_status.set("Update applied. Removing the completed installer…"); return; }
-        update_ready = true; announce_update("An update is ready. It will apply automatically when commands finish and Kalwer is hidden."); return; }
+        update_ready = true;
+        std::string saved;std::ifstream(pending_version_path)>>saved;
+        if(!include_prereleases || !kalwer::updates::Version::parse(saved)){
+            if(include_prereleases){
+                const auto retry=local_data_directory()/L"check-prereleases-once";
+                std::filesystem::create_directories(retry.parent_path(),error);std::ofstream(retry)<<"1";
+            }
+            announce_update(include_prereleases?"The pending update will apply when Kalwer is hidden; your prerelease check will continue after it restarts.":"An update is ready. It will apply automatically when commands finish and Kalwer is hidden.");return;
+        }
+        if(kalwer::updates::newer(saved,comparison_version))comparison_version=saved;
+    }
     std::filesystem::path partial = pending;
     partial += L".partial";
     {
@@ -335,15 +327,26 @@ void check_for_update() {
     }
     std::filesystem::remove(partial, error);
 
-    std::wstring effective;
-    if (!http_get(kLatestReleaseUrl, nullptr, &effective)) { announce_update("Could not check GitHub for updates. Your current version is unchanged."); return; }
-    const std::wstring marker = L"/tag/v";
-    const std::size_t marker_at = effective.rfind(marker);
-    if (marker_at == std::wstring::npos) { update_status.set("GitHub returned an unrecognized release URL. Run /updates to retry."); return; }
-    const std::wstring version = effective.substr(marker_at + marker.size());
-    if (!version_is_newer(version, kKalwerVersion)) { update_status.set("Kalwer v" + utf8(kKalwerVersion) + " is up to date."); return; }
-
-    announce_update("Kalwer v" + utf8(version) + " is available. Downloading and verifying the update…");
+    std::wstring version;
+    bool prerelease=false;
+    if(include_prereleases){
+        std::vector<std::uint8_t> bytes;
+        if(!http_get(L"https://api.github.com/repos/aridlin/kalwer/releases?per_page=100",&bytes)){announce_update("Could not check GitHub releases, including prereleases. Run /updates to retry.");return;}
+        auto releases=kalwer::updates::Reader(std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size())).read();
+        if(!releases){update_status.set("GitHub returned an invalid release list. Run /updates to retry.");return;}
+        auto selected=kalwer::updates::select(*releases,comparison_version,"kalwer.exe",true);
+        if(!selected){update_status.set("Kalwer v"+comparison_version+(comparison_version==utf8(kKalwerVersion)?" is up to date, including available prereleases.":" is ready to apply; no newer prerelease is available."));return;}
+        version=wide(selected->tag.substr(1));prerelease=selected->prerelease;
+    }else{
+        std::wstring effective;
+        if (!http_get(kLatestReleaseUrl, nullptr, &effective)) { announce_update("Could not check GitHub for updates. Your current version is unchanged."); return; }
+        const std::wstring marker = L"/tag/v";
+        const std::size_t marker_at = effective.rfind(marker);
+        if (marker_at == std::wstring::npos) { update_status.set("GitHub returned an unrecognized release URL. Run /updates to retry."); return; }
+        version = effective.substr(marker_at + marker.size());
+        if (!version_is_newer(version, kKalwerVersion)) { update_status.set("Kalwer v" + utf8(kKalwerVersion) + " is up to date."); return; }
+    }
+    announce_update("Kalwer v" + utf8(version) + (prerelease?" prerelease is available. Downloading and verifying the update…":" is available. Downloading and verifying the update…"));
     kalwer::UpdateAttempt attempt(announce_update);
     const std::wstring asset =
         L"https://github.com/aridlin/kalwer/releases/download/v" + version +
@@ -389,17 +392,27 @@ void check_for_update() {
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::filesystem::remove(partial, error);
     } else {
+        std::ofstream(pending_version_path,std::ios::trunc)<<utf8(version);
         attempt.complete("Kalwer v" + utf8(version) + " is verified. It will apply automatically when commands finish and Kalwer is hidden.");
         update_ready = true;
     }
 }
 
-void request_update_check() {
+std::atomic<bool> manual_update_requested{false};
+void request_update_check(bool include_prereleases=false) {
+    const auto retry=local_data_directory()/L"check-prereleases-once";
+    std::error_code error;
+    if(std::filesystem::remove(retry,error))include_prereleases=true;
+    if(include_prereleases)manual_update_requested.store(true);
     if (!update_status.begin_check()) return;
     std::thread([] {
-        try { check_for_update(); }
+        do {
+        bool manual=manual_update_requested.exchange(false);
+        try { check_for_update(manual); }
         catch (...) { update_status.set("The update check failed. Run /updates to retry."); }
+        }while(manual_update_requested.load());
         update_status.end_check();
+        if(manual_update_requested.load())request_update_check(true);
     }).detach();
 }
 
@@ -463,7 +476,7 @@ bool handle_update_bootstrap() {
         updated_on_launch = true;
         std::thread([pending] {
             for (int attempt = 0; attempt < 40; ++attempt) {
-                if (DeleteFileW(pending.c_str())) return;
+                if (DeleteFileW(pending.c_str())) {DeleteFileW((pending.wstring()+L".version").c_str());return;}
                 Sleep(100);
             }
             MoveFileExW(pending.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
@@ -1889,7 +1902,7 @@ void activate_selection(bool elevated = false) {
         else if (name == "/config-load") {bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored.":"No readable preset found."});}
         else if (name == "/config") open_settings_popup();
         else if (name == "/help") open_popup(kalwer::help());
-        else if (name == "/updates") { update_failed_on_launch = false; request_update_check(); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
+        else if (name == "/updates") { update_failed_on_launch = false; request_update_check(true); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: official Everything download page\n/reindex: ask Everything to rebuild"});
         else if (name == "/index-setup") setup_everything();
         else if (name == "/about") open_popup(kalwer::about());
@@ -2436,6 +2449,15 @@ void draw_special_icon(const AppEntry& result, float x, float y) {
     }
 }
 
+void layout_inline_input();
+HBRUSH inline_input_brush(HDC dc) {
+    const auto& theme=kalwer::themes[kalwer::appearance.theme];
+    auto rgb=[](unsigned c){return RGB((c>>16)&255,(c>>8)&255,c&255);};
+    SetTextColor(dc,rgb(theme.text));SetBkColor(dc,rgb(theme.background));
+    static HBRUSH brush=nullptr;static unsigned previous=~0u;
+    if(previous!=theme.background){if(brush)DeleteObject(brush);brush=CreateSolidBrush(rgb(theme.background));previous=theme.background;}
+    return brush;
+}
 DWORD search_text_index_at(float logical_x, float logical_y) {
     const std::wstring query = window_text(state.edit);
     if (query.empty()) return 0;
@@ -2456,9 +2478,9 @@ DWORD search_text_index_at(float logical_x, float logical_y) {
 void draw_search() {
     auto& render = state.render;
     fill_round(kSearchX, kSearchY, kSearchX + kSearchWidth,
-               kSearchY + kSearchHeight, 12.0f, color(0.0f, 0.075f, 0.043f, 0.975f));
+               kSearchY + search_height(), 12.0f, color(0.0f, 0.075f, 0.043f, 0.975f));
     stroke_round(kSearchX, kSearchY, kSearchX + kSearchWidth,
-                 kSearchY + kSearchHeight, 12.0f, 2.0f,
+                 kSearchY + search_height(), 12.0f, 2.0f,
                  color(0.31f, 0.68f, 0.47f, 0.86f));
     set_brush(color(0.46f, 0.82f, 0.57f, 0.96f));
     render.d2d_context->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(40, 44), 9, 9),
@@ -2469,9 +2491,10 @@ void draw_search() {
               color(0.30f, 0.68f, 0.47f));
     const wchar_t* help = L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
     draw_text(help, render.tiny_format.Get(), 350.0f,
-              58, 625, 72, color(0.46f, 0.67f, 0.52f));
+              58+input_extra_height, 625, 72+input_extra_height, color(0.46f, 0.67f, 0.52f));
 
     const std::wstring query = window_text(state.edit);
+    if(input_extra_height>0)return; // Native multiline edit owns text, selection and IME.
     const std::wstring display = query.empty() ? L"SEARCH THE VAULT" : query;
     const D2D1_COLOR_F input_color = query.empty()
         ? color(0.46f, 0.67f, 0.52f) : color(0.81f, 0.89f, 0.82f);
@@ -2534,19 +2557,19 @@ float result_slide() {
 
 void draw_results() {
     auto& render = state.render;
-    fill_round(kSearchX, kResultsY - 6, kSearchX + kSearchWidth,
+    fill_round(kSearchX, results_y() - 6, kSearchX + kSearchWidth,
                kLogicalHeight - 4.0f, 12.0f, color(0.0f, 0.075f, 0.043f, 0.88f));
     const int first_drawn = std::max(0, static_cast<int>(std::floor(state.scroll_visual)));
     const int visible_end = std::min(static_cast<int>(state.results.size()),
                                      static_cast<int>(std::ceil(state.scroll_visual)) +
                                          kVisibleResults + 1);
     render.d2d_context->PushAxisAlignedClip(
-        D2D1::RectF(kSearchX, kResultsY - 2.0f, kSearchX + kSearchWidth,
+        D2D1::RectF(kSearchX, results_y() - 2.0f, kSearchX + kSearchWidth,
                     kLogicalHeight - 4.0f), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     for (int index = first_drawn; index < visible_end; ++index) {
         const AppEntry& result = state.results[static_cast<size_t>(index)];
         const float display_row = static_cast<float>(index) - state.scroll_visual;
-        const float y = kResultsY + display_row * kRowPitch + result_slide();
+        const float y = results_y() + display_row * kRowPitch + result_slide();
         fill_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
                    color(0.0f, 0.105f, 0.057f, 0.90f));
         stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
@@ -2576,10 +2599,10 @@ void draw_results() {
     }
     render.d2d_context->PopAxisAlignedClip();
     if (state.results.empty()) {
-        draw_text(window_text(state.edit).substr(0, 1) == L":" ? file_status : L"NO RESULTS", render.title_format.Get(), 42, kResultsY + 16,
-                  400, kResultsY + 44, color(0.30f, 0.68f, 0.47f));
+        draw_text(window_text(state.edit).substr(0, 1) == L":" ? file_status : L"NO RESULTS", render.title_format.Get(), 42, results_y() + 16,
+                  400, results_y() + 44, color(0.30f, 0.68f, 0.47f));
     } else if (state.results.size() > kSelectableResults) {
-        const float track_y = kResultsY + 5.0f;
+        const float track_y = results_y() + 5.0f;
         const float track_height = kVisibleResults * kRowPitch - 14.0f;
         const float fraction = static_cast<float>(kSelectableResults) / state.results.size();
         const float thumb_height = std::max(26.0f, track_height * fraction);
@@ -2716,6 +2739,7 @@ struct GamePainter {
         static ComPtr<ID2D1Bitmap1> bitmap;static ID2D1DeviceContext* owner=nullptr;
         if(owner!=state.render.d2d_context.Get()){bitmap.Reset();owner=state.render.d2d_context.Get();}
         const auto properties=D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));
+        if(bitmap && (bitmap->GetPixelSize().width!=UINT32(width) || bitmap->GetPixelSize().height!=UINT32(height)))bitmap.Reset();
         if(!bitmap)state.render.d2d_context->CreateBitmap(D2D1::SizeU(width,height),pixels,width*4,&properties,bitmap.GetAddressOf());
         else bitmap->CopyFromMemory(nullptr,pixels,width*4);
         if(bitmap)state.render.d2d_context->DrawBitmap(bitmap.Get(),D2D1::RectF(x,y,x+w,y+h),1,D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
@@ -2959,7 +2983,7 @@ HRESULT render_frame() {
         static_cast<float>(state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
         opening,
-        kResultsY + result_slide() + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
+        results_y() + result_slide() + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
         state.results.empty() || state.popup_game ? 0 : 1,
         state.closing ? 1 : 0,
         {has_backdrop?float(state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode)+(kalwer::appearance.bw?10.f:0.f):0.f,state.popup_game?kalwer::appearance.opacity/100.f:0.f},
@@ -3055,6 +3079,7 @@ void show_launcher() {
     ShowWindow(state.window, SW_SHOWNORMAL);
     SetForegroundWindow(state.window);
     SetFocus(state.edit);
+    layout_inline_input();
     render_frame();
 }
 
@@ -3074,6 +3099,7 @@ void hide_launcher() {
     state.restored_scroll = state.scroll_offset;
     state.hidden_at = std::chrono::steady_clock::now();
     state.closing = true;
+    layout_inline_input();
     state.opening = false;
     state.closing_at = state.hidden_at;
     state.render_dirty = true;
@@ -3106,6 +3132,33 @@ void cleanup_jobs() {
     }
 }
 
+void layout_inline_input() {
+    if(!state.edit)return;
+    const auto text=window_text(state.edit);
+    bool multiline=text.find_first_of(L"\r\n")!=std::wstring::npos;
+    const float scale=std::max(.5f,state.render.scale);
+    static HFONT font=nullptr;static int font_height=0;
+    int height=static_cast<int>(std::lround(20*scale));
+    if(height!=font_height){
+        HFONT next=CreateFontW(-height,0,0,0,FW_MEDIUM,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,FIXED_PITCH,L"Consolas");
+        SendMessageW(state.edit,WM_SETFONT,reinterpret_cast<WPARAM>(next),FALSE);
+        if(font)DeleteObject(font);
+        font=next;font_height=height;
+    }
+    const int width=static_cast<int>(548*scale);
+    // Native wrapping and scrolling use the actual visible input width, even offscreen.
+    RECT old{};GetClientRect(state.edit,&old);
+    if(old.right!=width)SetWindowPos(state.edit,nullptr,-2000,-2000,width,200,SWP_NOZORDER|SWP_NOACTIVATE);
+    const int lines=multiline?std::clamp(static_cast<int>(SendMessageW(state.edit,EM_GETLINECOUNT,0,0)),2,8):1;
+    input_extra_height=multiline?(lines-1)*25.f:0;
+    const bool visible=multiline && !state.popup_open && !state.closing && !state.opening;
+    const int x=visible?static_cast<int>(67*scale):-2000;
+    const int y=visible?static_cast<int>((31+update_banner.offset())*scale):-2000;
+    RECT bounds{};GetWindowRect(state.edit,&bounds);POINT origin{bounds.left,bounds.top};ScreenToClient(state.window,&origin);
+    int wanted_height=static_cast<int>(25*lines*scale);
+    if(origin.x!=x || origin.y!=y || bounds.right-bounds.left!=width || bounds.bottom-bounds.top!=wanted_height)
+        SetWindowPos(state.edit,HWND_TOP,x,y,width,wanted_height,SWP_NOACTIVATE);
+}
 HWND multiline_window=nullptr,multiline_edit=nullptr;
 WNDPROC multiline_edit_proc=nullptr;
 std::uint64_t multiline_job_id=0,terminal_draft_job_id=0;
@@ -3133,24 +3186,29 @@ LRESULT CALLBACK multiline_input_proc(HWND window,UINT message,WPARAM wparam,LPA
 LRESULT CALLBACK multiline_window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
     if(message==WM_CLOSE){finish_multiline(false);return 0;}
     if(message==WM_DESTROY){multiline_window=multiline_edit=nullptr;return 0;}
+    if(message==WM_CTLCOLOREDIT)return reinterpret_cast<LRESULT>(inline_input_brush(reinterpret_cast<HDC>(wparam)));
     if(message==WM_SIZE && multiline_edit){MoveWindow(multiline_edit,12,40,LOWORD(lparam)-24,HIWORD(lparam)-52,TRUE);return 0;}
     return DefWindowProcW(window,message,wparam,lparam);
 }
 void open_multiline_editor(bool terminal=false) {
-    if(multiline_window){SetForegroundWindow(multiline_window);return;}
+    if(!terminal){SendMessageW(state.edit,EM_REPLACESEL,TRUE,reinterpret_cast<LPARAM>(L"\r\n"));layout_inline_input();state.render_dirty=true;return;}
+    if(multiline_window){SetFocus(multiline_edit);return;}
     WNDCLASSW cls{};cls.hInstance=state.instance;cls.lpfnWndProc=multiline_window_proc;cls.lpszClassName=L"KalwerMultilineInput";cls.hCursor=LoadCursorW(nullptr,IDC_IBEAM);cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);RegisterClassW(&cls);
     multiline_job_id=terminal && state.popup_job?state.popup_job->id:0;
     auto text=terminal?(multiline_job_id==terminal_draft_job_id?terminal_multiline_draft:L""):window_text(state.edit);DWORD begin=0,end=0;
     if(!terminal){SendMessageW(state.edit,EM_GETSEL,reinterpret_cast<WPARAM>(&begin),reinterpret_cast<LPARAM>(&end));text.replace(begin,end-begin,L"\r\n");begin+=2;}else begin=static_cast<DWORD>(text.size());
-    multiline_window=CreateWindowExW(WS_EX_TOOLWINDOW,cls.lpszClassName,L"Kalwer multiline input",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,660,380,nullptr,nullptr,state.instance,nullptr);
+    const float scale=state.render.scale;
+    multiline_window=CreateWindowExW(0,cls.lpszClassName,L"Kalwer multiline input",WS_CHILD|WS_CLIPCHILDREN,
+        static_cast<int>((kLogicalWidth+40)*scale),static_cast<int>(420*scale),static_cast<int>(448*scale),static_cast<int>(175*scale),state.window,nullptr,state.instance,nullptr);
     if(!multiline_window)return;
     HWND label=CreateWindowExW(0,L"STATIC",L"Enter: submit   Shift+Enter: newline   Escape: keep draft",WS_CHILD|WS_VISIBLE,12,10,620,24,multiline_window,nullptr,state.instance,nullptr);
     multiline_edit=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",text.c_str(),WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,12,40,620,285,multiline_window,nullptr,state.instance,nullptr);
     SendMessageW(label,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);SendMessageW(multiline_edit,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(ANSI_FIXED_FONT)),TRUE);
     SendMessageW(multiline_edit,EM_SETLIMITTEXT,1024*1024,0);SendMessageW(multiline_edit,EM_SETSEL,begin,begin);
     multiline_edit_proc=reinterpret_cast<WNDPROC>(SetWindowLongPtrW(multiline_edit,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(multiline_input_proc)));
-    if(!terminal)hide_launcher();
-    ShowWindow(multiline_window,SW_SHOW);SetForegroundWindow(multiline_window);SetFocus(multiline_edit);
+    RECT area{};GetClientRect(multiline_window,&area);
+    MoveWindow(label,8,6,area.right-16,24,TRUE);MoveWindow(multiline_edit,8,32,area.right-16,area.bottom-40,TRUE);
+    ShowWindow(multiline_window,SW_SHOW);SetFocus(multiline_edit);
 }
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -3244,7 +3302,12 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
         }
         return CallWindowProcW(state.edit_proc, window, message, wparam, lparam);
     }
+    if(message==WM_CHAR && (wparam==L'\r' || wparam==L'\n' || wparam==L'\t'))return 0;
     if (message == WM_KEYDOWN) {
+        if(wparam=='A' && (GetKeyState(VK_CONTROL)&0x8000)){SendMessageW(window,EM_SETSEL,0,-1);state.render_dirty=true;return 0;}
+        if(input_extra_height>0 && !(GetKeyState(VK_CONTROL)&0x8000) &&
+           (wparam==VK_UP || wparam==VK_DOWN || wparam==VK_PRIOR || wparam==VK_NEXT))
+            return CallWindowProcW(state.edit_proc,window,message,wparam,lparam);
         switch (wparam) {
             case VK_UP: move_selection(-1); return 0;
             case VK_DOWN: move_selection(1); return 0;
@@ -3285,16 +3348,20 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     switch (message) {
         case WM_CREATE: {
             state.edit = CreateWindowExW(0, L"EDIT", L"",
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-                -1000, -1000, 1, 1, window, reinterpret_cast<HMENU>(100),
+                WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                -2000, -2000, 548, 25, window, reinterpret_cast<HMENU>(100),
                 state.instance, nullptr);
+            SendMessageW(state.edit,EM_SETLIMITTEXT,1024*1024,0);
             state.edit_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
                 state.edit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(edit_window_proc)));
             return 0;
         }
+        case WM_CTLCOLOREDIT:
+            return reinterpret_cast<LRESULT>(inline_input_brush(reinterpret_cast<HDC>(wparam)));
         case WM_COMMAND:
             if (LOWORD(wparam) == 100 && HIWORD(wparam) == EN_CHANGE) {
                 state.last_input_at = std::chrono::steady_clock::now();
+                layout_inline_input();
                 update_results();
                 InvalidateRect(window, nullptr, FALSE);
             }
@@ -3346,7 +3413,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 if (state.popup_game) { state.popup_game.reset(); finish_hide_launcher(); position_and_resize(); return 0; }
                 position_and_resize(); hide_launcher();
             }
-            if (update_ready && elevated_command.empty() && !state.visible && !state.popup_open && !state.settings_window && !multiline_window &&
+            if (update_ready && !update_status.checking() && elevated_command.empty() && !state.visible && !state.popup_open && !state.settings_window && !multiline_window &&
                 !FindWindowW(kWindowClass, kAdminWindowTitle) &&
                 std::none_of(state.jobs.begin(), state.jobs.end(), [](const auto& job) { return job->running.load(); })) {
                 update_ready = false;
@@ -3386,7 +3453,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     return 0;
                 }
             }
-            if (state.visible && (state.render_dirty || state.opening)) render_frame();
+            if(multiline_window && (!state.popup_open || state.popup_closing))finish_multiline(false);
+            if (state.visible && (state.render_dirty || state.opening)) {render_frame();layout_inline_input();}
             if (state.closing) {
                 const float elapsed = std::chrono::duration<float, std::milli>(
                     std::chrono::steady_clock::now() - state.closing_at).count();
@@ -3444,12 +3512,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     state.render_dirty = true;
                 }
             }
-            const int row = static_cast<int>((logical_y - kResultsY - result_slide()) / kRowPitch);
+            const int row = static_cast<int>((logical_y - results_y() - result_slide()) / kRowPitch);
             if (!state.popup_open && logical_x >= kResultX &&
-                logical_x <= kResultX + kResultWidth && logical_y >= kResultsY &&
+                logical_x <= kResultX + kResultWidth && logical_y >= results_y() &&
                 row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY - result_slide()) / kRowPitch + state.scroll_visual;
+                    (logical_y - results_y() - result_slide()) / kRowPitch + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
                 const bool valid = index >= 0 && index < static_cast<int>(state.results.size()) &&
@@ -3505,11 +3573,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 state.render_dirty = true;
                 return 0;
             }
-            const int row = static_cast<int>((logical_y - kResultsY - result_slide()) / kRowPitch);
+            const int row = static_cast<int>((logical_y - results_y() - result_slide()) / kRowPitch);
             if (logical_x >= kResultX && logical_x <= kResultX + kResultWidth &&
-                logical_y >= kResultsY && row >= 0 && row < kSelectableResults) {
+                logical_y >= results_y() && row >= 0 && row < kSelectableResults) {
                 const float list_position =
-                    (logical_y - kResultsY - result_slide()) / kRowPitch + state.scroll_visual;
+                    (logical_y - results_y() - result_slide()) / kRowPitch + state.scroll_visual;
                 const int index = static_cast<int>(std::floor(list_position));
                 const float local_y = (list_position - index) * kRowPitch;
                 if (index >= 0 && index < static_cast<int>(state.results.size()) &&
@@ -3562,7 +3630,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 state.popup_game->focus(LOWORD(wparam) != WA_INACTIVE && !state.popup_closing);
                 state.game_last=std::chrono::steady_clock::now(); state.render_dirty=true;
             }
-            if (LOWORD(wparam) != WA_INACTIVE) SetFocus(state.edit);
+            if (LOWORD(wparam) != WA_INACTIVE) SetFocus(multiline_edit?multiline_edit:state.edit);
             if (LOWORD(wparam) == WA_INACTIVE && state.visible && !state.popup_open &&
                 !running_under_wine()) {
                 hide_launcher();

@@ -1,3 +1,5 @@
+#include "release_selection.hpp"
+#include "multiline_gtk.hpp"
 #include "passive_koins.hpp"
 #include "calculator_format.hpp"
 #include "system_file_index.hpp"
@@ -49,8 +51,9 @@ constexpr int kWindowHeight = 632;
 constexpr double kSearchX = 15.0;
 constexpr double kSearchY = 12.0;
 constexpr double kSearchWidth = 620.0;
-constexpr double kSearchHeight = 66.0;
-constexpr double kResultsY = 88.0;
+double input_extra_height = 0;
+double search_height() { return 66.0+input_extra_height; }
+double results_y() { return 88.0+input_extra_height; }
 constexpr double kResultX = 25.0;
 constexpr double kResultWidth = 600.0;
 constexpr double kRowHeight = 58.0;
@@ -60,7 +63,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.9.1";
+constexpr const char* kKalwerVersion = "0.9.2";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -96,6 +99,9 @@ struct State {
     GtkWidget* overlay = nullptr;
     GtkWidget* canvas = nullptr;
     GtkWidget* entry = nullptr;
+    GtkWidget* inline_scroll = nullptr;
+    GtkWidget* inline_view = nullptr;
+    bool syncing_input = false;
     GtkIconTheme* icon_theme = nullptr;
     std::vector<Result> results;
     std::vector<std::string> favorite_keys;
@@ -214,31 +220,8 @@ std::string trim_copy(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
-std::vector<int> version_parts(const std::string& version) {
-    std::vector<int> parts;
-    std::size_t cursor = 0;
-    while (cursor < version.size()) {
-        while (cursor < version.size() && !std::isdigit(
-                   static_cast<unsigned char>(version[cursor]))) ++cursor;
-        if (cursor >= version.size()) break;
-        char* end = nullptr;
-        const long value = std::strtol(version.c_str() + cursor, &end, 10);
-        if (!end || end == version.c_str() + cursor) break;
-        parts.push_back(static_cast<int>(std::min<long>(value, 1000000)));
-        cursor = static_cast<std::size_t>(end - version.c_str());
-        if (cursor < version.size() && version[cursor] != '.') break;
-        ++cursor;
-    }
-    return parts;
-}
-
 bool version_is_newer(const std::string& candidate, const std::string& current) {
-    std::vector<int> left = version_parts(candidate);
-    std::vector<int> right = version_parts(current);
-    const std::size_t count = std::max(left.size(), right.size());
-    left.resize(count);
-    right.resize(count);
-    return left > right;
+    return kalwer::updates::newer(candidate,current);
 }
 
 bool run_capture(gchar* const argv[], std::string& output) {
@@ -264,7 +247,8 @@ std::atomic<bool> update_ready{false};
 std::string update_restart_path;
 void announce_update(const std::string& message) { update_status.set(message); }
 
-void check_for_update() {
+void check_for_update(bool include_prereleases=false) {
+    std::string comparison_version=kKalwerVersion;
     gchar* installed = nullptr;
     const std::string marker_path = std::string(g_get_user_state_dir()) + "/kalwer/update-installed";
     if (g_file_get_contents(marker_path.c_str(), &installed, nullptr, nullptr)) {
@@ -272,7 +256,8 @@ void check_for_update() {
         if (version_is_newer(version, kKalwerVersion)) {
             update_status.set("Kalwer v" + version + " is installed. It will apply automatically when commands finish and Kalwer is hidden.");
             update_ready = true;
-            return;
+            if(!include_prereleases)return;
+            comparison_version=version;
         }
     }
     gchar* curl = g_find_program_in_path("curl");
@@ -284,7 +269,7 @@ void check_for_update() {
         g_free(curl);
         return;
     }
-    const std::string executable = executable_raw;
+    const std::string executable = update_restart_path.empty()?executable_raw:update_restart_path;
     gchar* directory = g_path_get_dirname(executable_raw);
     const bool writable = directory && g_access(directory, W_OK) == 0;
     g_free(directory);
@@ -295,6 +280,18 @@ void check_for_update() {
         return;
     }
 
+    std::string version;
+    bool prerelease=false;
+    if(include_prereleases){
+        std::string json;
+        gchar* argv[]={curl,const_cast<gchar*>("--fail"),const_cast<gchar*>("--silent"),const_cast<gchar*>("--show-error"),const_cast<gchar*>("--location"),const_cast<gchar*>("--connect-timeout"),const_cast<gchar*>("4"),const_cast<gchar*>("--max-time"),const_cast<gchar*>("15"),const_cast<gchar*>("--user-agent"),const_cast<gchar*>("Kalwer"),const_cast<gchar*>("https://api.github.com/repos/aridlin/kalwer/releases?per_page=100"),nullptr};
+        if(!run_capture(argv,json)){announce_update("Could not check GitHub releases, including prereleases. Run /updates to retry.");g_free(curl);return;}
+        auto releases=kalwer::updates::Reader(json).read();
+        if(!releases){update_status.set("GitHub returned an invalid release list. Run /updates to retry.");g_free(curl);return;}
+        auto selected=kalwer::updates::select(*releases,comparison_version,"kalwer-linux-x86_64",true);
+        if(!selected){update_status.set(std::string("Kalwer v")+comparison_version+(comparison_version==kKalwerVersion?" is up to date, including available prereleases.":" is ready to apply; no newer prerelease is available."));g_free(curl);return;}
+        version=selected->tag.substr(1);prerelease=selected->prerelease;
+    }else{
     std::string effective_url;
     gchar* check_argv[] = {
         curl,
@@ -326,14 +323,15 @@ void check_for_update() {
         g_free(curl);
         return;
     }
-    const std::string version = effective_url.substr(marker_at + marker.size());
+    version = effective_url.substr(marker_at + marker.size());
     if (!version_is_newer(version, kKalwerVersion)) {
         update_status.set(std::string("Kalwer v") + kKalwerVersion + " is up to date.");
         g_free(curl);
         return;
     }
 
-    announce_update("Kalwer v" + version + " is available. Downloading and verifying the update…");
+    }
+    announce_update("Kalwer v" + version + (prerelease?" prerelease is available. Downloading and verifying the update…":" is available. Downloading and verifying the update…"));
     kalwer::UpdateAttempt attempt(announce_update);
     const std::string download =
         "https://github.com/aridlin/kalwer/releases/download/v" + version +
@@ -423,12 +421,18 @@ void check_for_update() {
     g_free(curl);
 }
 
-void request_update_check() {
+std::atomic<bool> manual_update_requested{false};
+void request_update_check(bool include_prereleases=false) {
+    if(include_prereleases)manual_update_requested.store(true);
     if (!update_status.begin_check()) return;
     std::thread([] {
-        try { check_for_update(); }
+        do {
+        bool manual=manual_update_requested.exchange(false);
+        try { check_for_update(manual); }
         catch (...) { update_status.set("The update check failed. Run /updates to retry."); }
+        }while(manual_update_requested.load());
         update_status.end_check();
+        if(manual_update_requested.load())request_update_check(true);
     }).detach();
 }
 
@@ -771,7 +775,7 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
 }
 
 void draw_search(cairo_t* cr) {
-    rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, kSearchHeight, 12);
+    rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, search_height(), 12);
     theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
     cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 2.0);
@@ -787,7 +791,9 @@ void draw_search(cairo_t* cr) {
     cairo_stroke(cr);
 
     const std::string query = state.entry ? gtk_entry_get_text(GTK_ENTRY(state.entry)) : "";
-    if (query.empty()) {
+    if (state.inline_view) {
+        // The native text view draws selection, IME and the caret.
+    } else if (query.empty()) {
         draw_layout(cr, "SEARCH THE VAULT", 67, 33,
                     "JetBrainsMono Nerd Font SemiBold 15", 0.46, 0.67, 0.52);
     } else {
@@ -801,21 +807,21 @@ void draw_search(cairo_t* cr) {
         ? "TAB " + std::to_string(state.completion_index + 1) + "/" +
               std::to_string(state.completion_candidates.size()) + "   SHIFT+TAB BACK"
         : "> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
-    draw_layout(cr, help, completing ? 360 : 350, 60,
+    draw_layout(cr, help, completing ? 360 : 350, 60 + input_extra_height,
                 "JetBrainsMono Nerd Font Medium 7.5", 0.46, 0.67, 0.52);
 }
 
 void draw_results(cairo_t* cr) {
     // This is part of the finished UI texture, not a separate compositor
     // surface, so the shader cuts the panel through the same dots as its rows.
-    rounded_rectangle(cr, kSearchX, kResultsY - 6, kSearchWidth,
-                      kWindowHeight - kResultsY - 4, 12);
+    rounded_rectangle(cr, kSearchX, results_y() - 6, kSearchWidth,
+                      kWindowHeight - results_y() - 4, 12);
     theme_source_rgba(cr, 0.0, 0.075, 0.043, 0.88);
     cairo_fill(cr);
 
     cairo_save(cr);
-    cairo_rectangle(cr, kSearchX, kResultsY - 2,
-                    kSearchWidth, kWindowHeight - kResultsY - 2);
+    cairo_rectangle(cr, kSearchX, results_y() - 2,
+                    kSearchWidth, kWindowHeight - results_y() - 2);
     cairo_clip(cr);
     const int first_drawn = std::max(0, static_cast<int>(std::floor(state.scroll_visual)));
     const int visible_end = std::min<int>(
@@ -824,7 +830,7 @@ void draw_results(cairo_t* cr) {
     for (int index = first_drawn; index < visible_end; ++index) {
         const Result& result = state.results[index];
         const double display_row = index - state.scroll_visual;
-        const double y = kResultsY + display_row * kRowPitch;
+        const double y = results_y() + display_row * kRowPitch;
         rounded_rectangle(cr, kResultX, y, kResultWidth, kRowHeight, 10);
         // Selection is composited by the GL shader. Keeping it out of the
         // finished UI texture prevents the destination row from highlighting
@@ -868,10 +874,10 @@ void draw_results(cairo_t* cr) {
         const char* message = files ? file_status.c_str() : state.query_failed ? "ELEPHANT IS UNAVAILABLE"
                               : state.query_pending ? "ASKING ELEPHANT…"
                                                     : "NO RESULTS";
-        draw_layout(cr, message, 42, kResultsY + 16,
+        draw_layout(cr, message, 42, results_y() + 16,
                     "JetBrainsMono Nerd Font Bold 8.5", 0.30, 0.68, 0.47);
     } else if (state.results.size() > kSelectableResults) {
-        const double track_y = kResultsY + 5;
+        const double track_y = results_y() + 5;
         const double track_height = kVisibleResults * kRowPitch - 14;
         const double fraction = static_cast<double>(kSelectableResults) / state.results.size();
         const double thumb_height = std::max(26.0, track_height * fraction);
@@ -1181,7 +1187,7 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
                 kWindowWidth, kWindowHeight);
     glUniform1f(glGetUniformLocation(state.gl_program, "opening"), progress);
     glUniform1f(glGetUniformLocation(state.gl_program, "selection_y"),
-                static_cast<float>(kResultsY + update_banner.offset() +
+                static_cast<float>(results_y() + update_banner.offset() +
                     (state.selection_visual - state.scroll_visual) * kRowPitch));
     glUniform1i(glGetUniformLocation(state.gl_program, "has_results"),
                 state.results.empty() ? 0 : 1);
@@ -1684,7 +1690,7 @@ void continue_in_ghostty(GtkButton*, gpointer);
 
 void open_multiline_editor(bool terminal=false);
 gboolean on_output_key(GtkWidget*, GdkEventKey* event, gpointer) {
-    if(state.output_terminal && event->keyval==GDK_KEY_Return && (event->state&GDK_SHIFT_MASK)){open_multiline_editor(true);return TRUE;}
+    if(state.output_terminal && gtk_window_get_focus(GTK_WINDOW(state.output_window))==state.output_terminal && event->keyval==GDK_KEY_Return && (event->state&GDK_SHIFT_MASK)){open_multiline_editor(true);return TRUE;}
     if (event->keyval == GDK_KEY_Escape) {
         close_output_and_kalwer();
         return TRUE;
@@ -2631,7 +2637,7 @@ void activate_selection(bool elevated = false) {
         else if (name == "/config-load") { bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored. Reopen Kalwer to see it.":"No readable preset found."}); }
         else if (name == "/config") show_settings_window();
         else if (name == "/help") open_popup(kalwer::help());
-        else if (name == "/updates") { request_update_check(); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
+        else if (name == "/updates") { request_update_check(true); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nplocate indexes readable local filesystems, including home and mounted local drives. Virtual filesystems and network filesystems are excluded.\n\n/index-setup: install plocate if needed\n/reindex: refresh the incremental index\n\nUpdates run every 15 minutes while Kalwer is running."});
         else if (name == "/index-setup") {
             gchar* program = g_find_program_in_path("plocate");
@@ -2796,6 +2802,7 @@ gboolean animation_tick(GtkWidget*, GdkFrameClock* clock, gpointer) {
         }
     }
 
+    if(state.inline_scroll)gtk_widget_set_opacity(state.inline_scroll,clamp01((state.reveal_visual-.85)/.15));
     const double response = 1.0 - std::exp(-elapsed_ms / 72.0);
     const double selection_target = static_cast<double>(state.selection);
     const double selection_difference = selection_target - state.selection_visual;
@@ -2946,52 +2953,115 @@ bool complete_command(bool backwards) {
 
 GtkWidget* multiline_editor=nullptr;
 std::string terminal_multiline_draft,terminal_multiline_session;
-void finish_multiline_editor(GtkWidget* window,bool submit,bool elevated=false) {
-    auto* view=GTK_TEXT_VIEW(g_object_get_data(G_OBJECT(window),"input-view"));
-    auto* buffer=gtk_text_view_get_buffer(view);GtkTextIter a,b;gtk_text_buffer_get_bounds(buffer,&a,&b);
-    gchar* raw=gtk_text_buffer_get_text(buffer,&a,&b,FALSE);std::string text=raw;g_free(raw);
-    const char* session=static_cast<const char*>(g_object_get_data(G_OBJECT(window),"terminal-session"));
-    if(session){
-        terminal_multiline_session=session;terminal_multiline_draft=text;
-        if(submit && state.output_terminal && state.output_session==session){
-            vte_terminal_paste_text(VTE_TERMINAL(state.output_terminal),text.c_str());
-            vte_terminal_feed_child(VTE_TERMINAL(state.output_terminal),"\r",1);terminal_multiline_draft.clear();
+void style_inline_view(GtkWidget* view,bool terminal=false) {
+    GtkCssProvider* css=gtk_css_provider_new();
+    const std::string source=kalwer::theme_css(
+        "#kalwer-inline-input, #kalwer-inline-input text { background: #00130b; color: #cfe3d2; font-family: monospace; padding: 0; font-size: "+std::string(terminal?"12":"20")+"px; }"
+        "#kalwer-inline-input text selection { background: #002e18; color: #cfe3d2; }");
+    gtk_css_provider_load_from_data(css,source.c_str(),-1,nullptr);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(view),GTK_STYLE_PROVIDER(css),GTK_STYLE_PROVIDER_PRIORITY_APPLICATION+1);
+    g_object_unref(css);
+}
+std::string text_view_text(GtkWidget* view) {
+    auto* buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));GtkTextIter a,b;
+    gtk_text_buffer_get_bounds(buffer,&a,&b);
+    gchar* raw=gtk_text_buffer_get_text(buffer,&a,&b,FALSE);std::string text=raw;g_free(raw);return text;
+}
+void resize_inline_input() {
+    if(!state.inline_view)return;
+    auto* buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.inline_view));
+    // Count wrapped display lines, so a long pasted command remains editable too.
+    GtkTextIter it;gtk_text_buffer_get_start_iter(buffer,&it);int lines=1;
+    while(lines<8 && gtk_text_view_forward_display_line(GTK_TEXT_VIEW(state.inline_view),&it))++lines;
+    lines=std::clamp(std::max(lines,gtk_text_buffer_get_line_count(buffer)),1,8);
+    input_extra_height=(lines-1)*25;
+    gtk_widget_set_size_request(state.inline_scroll,548,25*lines);
+    gtk_widget_set_margin_top(state.inline_scroll,31+update_banner.offset());
+    invalidate_finished();if(state.canvas)gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
+}
+void close_inline_input() {
+    if(!state.inline_scroll)return;
+    GtkWidget* scroll=state.inline_scroll;state.inline_scroll=state.inline_view=nullptr;
+    input_extra_height=0;gtk_widget_destroy(scroll);gtk_widget_show(state.entry);
+}
+void finish_multiline_editor(GtkWidget* editor,bool submit,bool=false) {
+    auto* view=GTK_WIDGET(g_object_get_data(G_OBJECT(editor),"input-view"));
+    terminal_multiline_draft=text_view_text(view);
+    const char* session=static_cast<const char*>(g_object_get_data(G_OBJECT(editor),"terminal-session"));
+    terminal_multiline_session=session?session:"";
+    if(submit && state.output_terminal && state.output_session==terminal_multiline_session){
+        vte_terminal_paste_text(VTE_TERMINAL(state.output_terminal),terminal_multiline_draft.c_str());
+        vte_terminal_feed_child(VTE_TERMINAL(state.output_terminal),"\r",1);terminal_multiline_draft.clear();
+    }
+    gtk_widget_destroy(editor);
+    if(state.output_terminal)gtk_widget_grab_focus(state.output_terminal);
+}
+void open_inline_input(bool newline) {
+    if(state.inline_view){if(newline)gtk_text_buffer_insert_at_cursor(gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.inline_view)),"\n",1);gtk_widget_grab_focus(state.inline_view);return;}
+    state.inline_scroll=gtk_scrolled_window_new(nullptr,nullptr);
+    state.inline_view=gtk_text_view_new();
+    gtk_widget_set_name(state.inline_view,"kalwer-inline-input");style_inline_view(state.inline_view);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(state.inline_view),TRUE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(state.inline_view),GTK_WRAP_WORD_CHAR);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(state.inline_scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_halign(state.inline_scroll,GTK_ALIGN_START);gtk_widget_set_valign(state.inline_scroll,GTK_ALIGN_START);
+    gtk_widget_set_margin_start(state.inline_scroll,67);
+    gtk_container_add(GTK_CONTAINER(state.inline_scroll),state.inline_view);
+    gtk_overlay_add_overlay(GTK_OVERLAY(state.overlay),state.inline_scroll);
+    auto* buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.inline_view));
+    gtk_text_buffer_set_text(buffer,gtk_entry_get_text(GTK_ENTRY(state.entry)),-1);
+    gint start=gtk_editable_get_position(GTK_EDITABLE(state.entry)),end=start;
+    gtk_editable_get_selection_bounds(GTK_EDITABLE(state.entry),&start,&end);
+    GtkTextIter first,last;gtk_text_buffer_get_iter_at_offset(buffer,&first,start);gtk_text_buffer_get_iter_at_offset(buffer,&last,end);
+    gtk_text_buffer_select_range(buffer,&last,&first);
+    g_signal_connect(buffer,"changed",G_CALLBACK(+[](GtkTextBuffer*,gpointer){
+        if(state.syncing_input)return;
+        state.syncing_input=true;auto text=text_view_text(state.inline_view);
+        gtk_entry_set_text(GTK_ENTRY(state.entry),text.c_str());state.syncing_input=false;
+        resize_inline_input();
+    }),nullptr);
+    g_signal_connect(buffer,"mark-set",G_CALLBACK(+[](GtkTextBuffer* buffer,GtkTextIter*,GtkTextMark*,gpointer){
+        if(state.syncing_input)return;
+        GtkTextIter cursor;gtk_text_buffer_get_iter_at_mark(buffer,&cursor,gtk_text_buffer_get_insert(buffer));
+        gtk_editable_set_position(GTK_EDITABLE(state.entry),gtk_text_iter_get_offset(&cursor));
+    }),nullptr);
+    g_signal_connect(state.inline_view,"key-press-event",G_CALLBACK(+[](GtkWidget*,GdkEventKey* event,gpointer)->gboolean {
+        if(event->keyval==GDK_KEY_Escape){dismiss_popup();return TRUE;}
+        bool enter=event->keyval==GDK_KEY_Return || event->keyval==GDK_KEY_KP_Enter;
+        if(enter && !(event->state&GDK_SHIFT_MASK)){activate_selection((event->state&GDK_CONTROL_MASK)!=0);return TRUE;}
+        if((event->state&GDK_CONTROL_MASK) && (event->keyval==GDK_KEY_Up || event->keyval==GDK_KEY_Down)){
+            move_selection(event->keyval==GDK_KEY_Up?-1:1);ensure_animation();return TRUE;
         }
-    }else {gtk_entry_set_text(GTK_ENTRY(state.entry),text.c_str());gtk_editable_set_position(GTK_EDITABLE(state.entry),-1);}
-    bool terminal=session!=nullptr;gtk_widget_destroy(window);
-    if(submit && !terminal)activate_selection(elevated);
-    else if(terminal && state.output_window)gtk_window_present(GTK_WINDOW(state.output_window));
+        return FALSE;
+    }),nullptr);
+    kalwer::TextHistory::attach(state.inline_view);
+    if(newline){gtk_text_buffer_begin_user_action(buffer);gtk_text_buffer_delete_selection(buffer,TRUE,TRUE);gtk_text_buffer_insert_at_cursor(buffer,"\n",1);gtk_text_buffer_end_user_action(buffer);}
+    gtk_widget_hide(state.entry);gtk_widget_show_all(state.inline_scroll);resize_inline_input();gtk_widget_grab_focus(state.inline_view);
 }
 void open_multiline_editor(bool terminal) {
-    if(multiline_editor){gtk_window_present(GTK_WINDOW(multiline_editor));return;}
-    GtkWidget* window=gtk_window_new(GTK_WINDOW_TOPLEVEL);multiline_editor=window;
-    g_signal_connect(window,"destroy",G_CALLBACK(+[](GtkWidget*,gpointer){multiline_editor=nullptr;}),nullptr);
-    gtk_window_set_title(GTK_WINDOW(window),terminal?"Kalwer PTY multiline input":"Kalwer multiline input");
-    gtk_window_set_default_size(GTK_WINDOW(window),640,340);
-    gtk_window_set_transient_for(GTK_WINDOW(window),GTK_WINDOW(terminal?state.output_window:state.window));
-    GtkWidget* box=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);gtk_container_set_border_width(GTK_CONTAINER(box),12);
-    GtkWidget* hint=gtk_label_new("Enter: submit   Shift+Enter: newline   Escape: keep draft");
+    if(!terminal){open_inline_input(true);return;}
+    if(multiline_editor){gtk_widget_grab_focus(GTK_WIDGET(g_object_get_data(G_OBJECT(multiline_editor),"input-view")));return;}
+    if(!state.output_terminal || !state.output_content)return;
+    GtkWidget* box=gtk_box_new(GTK_ORIENTATION_VERTICAL,3);multiline_editor=box;
+    GtkWidget* hint=gtk_label_new("Enter: send · Shift+Enter: newline · Esc: draft");
+    gtk_label_set_ellipsize(GTK_LABEL(hint),PANGO_ELLIPSIZE_END);gtk_widget_set_tooltip_text(hint,"Enter: send · Shift+Enter: newline · Escape: keep draft");
     GtkWidget* scroll=gtk_scrolled_window_new(nullptr,nullptr);GtkWidget* view=gtk_text_view_new();
-    g_object_set_data(G_OBJECT(window),"input-view",view);
-    if(terminal)g_object_set_data_full(G_OBJECT(window),"terminal-session",g_strdup(state.output_session.c_str()),g_free);
+    gtk_widget_set_name(view,"kalwer-inline-input");style_inline_view(view,true);
+    gtk_widget_set_size_request(scroll,-1,110);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(view),TRUE);gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view),GTK_WRAP_WORD_CHAR);
-    GtkTextBuffer* buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
-    const std::string initial=terminal?(terminal_multiline_session==state.output_session?terminal_multiline_draft:""):gtk_entry_get_text(GTK_ENTRY(state.entry));
-    gtk_text_buffer_set_text(buffer,initial.c_str(),-1);
-    GtkTextIter cursor;gtk_text_buffer_get_iter_at_offset(buffer,&cursor,terminal?-1:gtk_editable_get_position(GTK_EDITABLE(state.entry)));
-    gint start=0,end=0;
-    if(!terminal && gtk_editable_get_selection_bounds(GTK_EDITABLE(state.entry),&start,&end)) {
-        GtkTextIter first,last;gtk_text_buffer_get_iter_at_offset(buffer,&first,start);gtk_text_buffer_get_iter_at_offset(buffer,&last,end);gtk_text_buffer_delete(buffer,&first,&last);cursor=first;
-    }
-    gtk_text_buffer_place_cursor(buffer,&cursor);if(!terminal)gtk_text_buffer_insert_at_cursor(buffer,"\n",1);
-    g_signal_connect(window,"delete-event",G_CALLBACK(+[](GtkWidget* window,GdkEvent*,gpointer)->gboolean {finish_multiline_editor(window,false);return TRUE;}),nullptr);
-    gtk_container_add(GTK_CONTAINER(scroll),view);gtk_box_pack_start(GTK_BOX(box),hint,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);gtk_container_add(GTK_CONTAINER(window),box);
-    g_signal_connect(view,"key-press-event",G_CALLBACK(+[](GtkWidget*,GdkEventKey* event,gpointer window)->gboolean {
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)),terminal_multiline_session==state.output_session?terminal_multiline_draft.c_str():"",-1);
+    g_object_set_data(G_OBJECT(box),"input-view",view);
+    g_object_set_data_full(G_OBJECT(box),"terminal-session",g_strdup(state.output_session.c_str()),g_free);
+    gtk_container_add(GTK_CONTAINER(scroll),view);gtk_box_pack_start(GTK_BOX(box),hint,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
+    gtk_box_pack_end(GTK_BOX(state.output_content),box,FALSE,FALSE,0);
+    g_signal_connect(box,"destroy",G_CALLBACK(+[](GtkWidget*,gpointer){multiline_editor=nullptr;}),nullptr);
+    g_signal_connect(view,"key-press-event",G_CALLBACK(+[](GtkWidget*,GdkEventKey* event,gpointer editor)->gboolean {
         bool enter=event->keyval==GDK_KEY_Return || event->keyval==GDK_KEY_KP_Enter;
-        if(event->keyval!=GDK_KEY_Escape && (!enter || (event->state&GDK_SHIFT_MASK)))return FALSE;
-        finish_multiline_editor(GTK_WIDGET(window),enter,(event->state&GDK_CONTROL_MASK)!=0);return TRUE;
-    }),window);
-    gtk_widget_show_all(window);gtk_widget_grab_focus(view);
+        if(event->keyval==GDK_KEY_Escape || (enter && !(event->state&GDK_SHIFT_MASK))){finish_multiline_editor(GTK_WIDGET(editor),enter);return TRUE;}
+        return FALSE;
+    }),box);
+    kalwer::TextHistory::attach(view);
+    gtk_widget_show_all(box);gtk_widget_grab_focus(view);
 }
 
 gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
@@ -3060,6 +3130,13 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
 }
 
 void on_entry_changed(GtkEditable*, gpointer) {
+    if(state.inline_view && !state.syncing_input){
+        const std::string text=gtk_entry_get_text(GTK_ENTRY(state.entry));
+        if(text.empty())close_inline_input();
+        else if(text!=text_view_text(state.inline_view)){
+            state.syncing_input=true;gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.inline_view)),text.c_str(),-1);state.syncing_input=false;resize_inline_input();
+        }
+    }
     if (!state.applying_completion) clear_completion();
     const std::string input = gtk_entry_get_text(GTK_ENTRY(state.entry));
     if (!input.empty() && input.front() == ':') {
@@ -3115,10 +3192,10 @@ void on_entry_cursor_changed(GObject*, GParamSpec*, gpointer) {
 }
 
 int pointer_result(double x, double y) {
-    if (x < kResultX || x > kResultX + kResultWidth || y < kResultsY) return -1;
-    const int row = static_cast<int>((y - kResultsY) / kRowPitch);
+    if (x < kResultX || x > kResultX + kResultWidth || y < results_y()) return -1;
+    const int row = static_cast<int>((y - results_y()) / kRowPitch);
     if (row < 0 || row >= kSelectableResults) return -1;
-    const double list_position = (y - kResultsY) / kRowPitch + state.scroll_visual;
+    const double list_position = (y - results_y()) / kRowPitch + state.scroll_visual;
     const int result = static_cast<int>(std::floor(list_position));
     const double local_y = (list_position - result) * kRowPitch;
     if (result < 0) return -1;
@@ -3164,7 +3241,7 @@ gboolean focus_kalwer(gpointer) {
                   nullptr, nullptr, nullptr, &error);
     if (error) g_error_free(error);
     gtk_window_present(GTK_WINDOW(state.window));
-    gtk_widget_grab_focus(state.entry);
+    gtk_widget_grab_focus(state.inline_view?state.inline_view:state.entry);
     return G_SOURCE_REMOVE;
 }
 
@@ -3217,8 +3294,9 @@ void show_popup() {
     kalwer::live_backdrop.configure(false,0,0,1);
     invalidate_surfaces();
     gtk_widget_show_all(state.window);
+    if(state.inline_view){gtk_widget_hide(state.entry);style_inline_view(state.inline_view);resize_inline_input();gtk_widget_set_opacity(state.inline_scroll,0);}
     gtk_window_present(GTK_WINDOW(state.window));
-    gtk_widget_grab_focus(state.entry);
+    gtk_widget_grab_focus(state.inline_view?state.inline_view:state.entry);
     g_timeout_add(35, focus_kalwer, nullptr);
     g_timeout_add(180, focus_kalwer, nullptr);
     ensure_animation();
@@ -3248,7 +3326,7 @@ void activate(GtkApplication* app, gpointer) {
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
-        if (!update_ready || update_restart_path.empty() || state.output_window || file_index.busy() ||
+        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() ||
             (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
         for (const auto& job : state.jobs) {
             int status = 0;
@@ -3301,7 +3379,7 @@ void activate(GtkApplication* app, gpointer) {
     state.entry = gtk_entry_new();
     gtk_widget_set_name(state.entry, "kalwer-input-proxy");
     gtk_widget_set_size_request(state.entry, static_cast<int>(kSearchWidth),
-                                static_cast<int>(kSearchHeight));
+                                static_cast<int>(search_height()));
     gtk_widget_set_halign(state.entry, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(state.entry, GTK_ALIGN_START);
     gtk_widget_set_margin_top(state.entry, static_cast<int>(kSearchY));
@@ -3324,6 +3402,21 @@ void activate(GtkApplication* app, gpointer) {
     g_signal_connect(state.canvas, "button-press-event", G_CALLBACK(on_button), nullptr);
     g_signal_connect(state.canvas, "scroll-event", G_CALLBACK(on_scroll), nullptr);
     g_signal_connect(state.entry, "key-press-event", G_CALLBACK(on_entry_key), nullptr);
+    g_signal_connect(state.entry,"paste-clipboard",G_CALLBACK(+[](GtkEntry* entry,gpointer){
+        g_signal_stop_emission_by_name(entry,"paste-clipboard");
+        gtk_clipboard_request_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),+[](GtkClipboard*,const gchar* raw,gpointer){
+            if(!raw || !state.entry)return;
+            if(state.inline_view || strchr(raw,'\n') || strchr(raw,'\r')){
+                open_inline_input(false);
+                auto* buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(state.inline_view));
+                gtk_text_buffer_begin_user_action(buffer);gtk_text_buffer_delete_selection(buffer,TRUE,TRUE);gtk_text_buffer_insert_at_cursor(buffer,raw,-1);gtk_text_buffer_end_user_action(buffer);
+            }else{
+                auto* editable=GTK_EDITABLE(state.entry);gint start,end;
+                if(gtk_editable_get_selection_bounds(editable,&start,&end))gtk_editable_delete_text(editable,start,end);
+                gint position=gtk_editable_get_position(editable);gtk_editable_insert_text(editable,raw,-1,&position);gtk_editable_set_position(editable,position);
+            }
+        },nullptr);
+    }),nullptr);
     g_signal_connect(state.entry, "changed", G_CALLBACK(on_entry_changed), nullptr);
     g_signal_connect(state.entry, "notify::cursor-position",
                      G_CALLBACK(on_entry_cursor_changed), nullptr);

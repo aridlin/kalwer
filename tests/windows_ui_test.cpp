@@ -35,6 +35,33 @@ int main() {
         SendMessageW(GetDlgItem(same,IDOK),BM_CLICK,0,0);
         assert(!state.settings_window);
     }
+    // Exercise real native editing, including DPI bounds and undo, without a GPU.
+    WNDCLASSW input_class{};input_class.hInstance=state.instance;input_class.lpszClassName=L"KalwerInlineTest";
+    input_class.lpfnWndProc=+[](HWND window,UINT message,WPARAM w,LPARAM l)->LRESULT{
+        if(message==WM_COMMAND && HIWORD(w)==EN_CHANGE){layout_inline_input();return 0;}
+        return DefWindowProcW(window,message,w,l);
+    };
+    RegisterClassW(&input_class);
+    state.window=CreateWindowW(input_class.lpszClassName,L"Inline test",WS_OVERLAPPEDWINDOW,0,0,1400,1400,nullptr,nullptr,state.instance,nullptr);
+    state.edit=CreateWindowW(L"EDIT",L"",WS_CHILD|WS_VISIBLE|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,0,0,548,25,state.window,reinterpret_cast<HMENU>(100),state.instance,nullptr);
+    state.edit_proc=reinterpret_cast<WNDPROC>(SetWindowLongPtrW(state.edit,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(edit_window_proc)));
+    for(float scale:{1.f,1.5f,2.f}) {
+        state.render.scale=scale;state.opening=state.closing=state.popup_open=false;
+        SetWindowTextW(state.edit,L"> echo first");SendMessageW(state.edit,EM_SETSEL,12,12);
+        open_multiline_editor();assert(!multiline_window);
+        assert(window_text(state.edit)==L"> echo first\r\n");
+        SendMessageW(state.edit,EM_REPLACESEL,TRUE,reinterpret_cast<LPARAM>(L"echo second"));
+        assert(window_text(state.edit)==L"> echo first\r\necho second");
+        assert(input_extra_height>=25 && GetParent(state.edit)==state.window);
+        RECT bounds{};GetWindowRect(state.edit,&bounds);MapWindowPoints(nullptr,state.window,reinterpret_cast<POINT*>(&bounds),2);
+        assert(std::abs(bounds.left-67*scale)<=1 && bounds.bottom<=int((search_height()+12)*scale));
+        // A selection spanning the line break supports native replacement and undo.
+        SendMessageW(state.edit,EM_SETSEL,7,18);SendMessageW(state.edit,EM_REPLACESEL,TRUE,reinterpret_cast<LPARAM>(L"replacement"));
+        SendMessageW(state.edit,EM_UNDO,0,0);assert(window_text(state.edit)==L"> echo first\r\necho second");
+        SendMessageW(state.edit,EM_SETSEL,0,-1);SendMessageW(state.edit,EM_REPLACESEL,TRUE,reinterpret_cast<LPARAM>(L""));
+        assert(input_extra_height==0);
+    }
+    DestroyWindow(state.window);state.window=state.edit=nullptr;
     auto apps=std::make_shared<std::vector<AppEntry>>();
     for(int i=0;i<20000;++i) {AppEntry app; app.title=L"Application "+std::to_wstring(i);app.folded=lower_copy(app.title);app.link=app.title;apps->push_back(std::move(app));}
     app_search.submit({L"zzzz",apps,{}});

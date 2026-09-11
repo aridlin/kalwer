@@ -12,6 +12,7 @@ struct GpuPainter {
     std::vector<Vertex> vertices;
     GLuint program=0,vao=0,vbo=0,atlas=0,backdrop=0,frame=0;
     std::array<float,96> advances{};
+    int frame_width=0,frame_height=0;
     float logical_width=420,logical_height=452,origin_y=38;
     static GLuint shader(GLenum type,const char* source) {GLuint s=glCreateShader(type);glShaderSource(s,1,&source,nullptr);glCompileShader(s);return s;}
     bool init() {
@@ -42,7 +43,7 @@ color=vec4(rgb*a,a);})";
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
         return true;
     }
-    void release(){glDeleteTextures(1,&frame);glDeleteTextures(1,&atlas);glDeleteBuffers(1,&vbo);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);program=0;}
+    void release(){glDeleteTextures(1,&frame);glDeleteTextures(1,&atlas);glDeleteBuffers(1,&vbo);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);program=frame=0;frame_width=frame_height=0;}
     void quad(double x,double y,double w,double h,unsigned c,float a,int kind,float u=0,float v=0,float uw=1,float vh=1) {
         c=appearance.tint(c);float r=((c>>16)&255)/255.f,g=((c>>8)&255)/255.f,b=(c&255)/255.f;
         Vertex q[4]={{float(x),float(y),u,v,r,g,b,a,float(kind)},{float(x+w),float(y),u+uw,v,r,g,b,a,float(kind)},{float(x+w),float(y+h),u+uw,v+vh,r,g,b,a,float(kind)},{float(x),float(y+h),u,v+vh,r,g,b,a,float(kind)}};
@@ -70,7 +71,13 @@ color=vec4(rgb*a,a);})";
     }
     void image(double x,double y,double w,double h,const uint32_t* pixels,int width,int height){
         if(!frame)glGenTextures(1,&frame);
-        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,frame);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_BGRA,GL_UNSIGNED_BYTE,pixels);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);quad(x,y,w,h,0xffffff,1,5);
+        glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,frame);
+        if(frame_width!=width || frame_height!=height){
+            glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            frame_width=width;frame_height=height;
+        }else glTexSubImage2D(GL_TEXTURE_2D,0,0,0,width,height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
+        quad(x,y,w,h,0xffffff,1,5);
     }
     void flush(){
         glUseProgram(program);glUniform2f(glGetUniformLocation(program,"logicalSize"),logical_width,logical_height);glUniform1f(glGetUniformLocation(program,"originY"),origin_y);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,atlas);glUniform1i(glGetUniformLocation(program,"glyphs"),0);
