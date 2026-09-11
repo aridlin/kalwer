@@ -246,7 +246,7 @@ struct ImpactResponse {
             steering.heading=steering.body=sign*Steering::degrees(2);
             steering.camera=steering.body-sign*Steering::degrees(5);
         }
-        cooldown=1638;
+        if(hit!=Hit::rear)cooldown=1638;
         return true;
     }
 };

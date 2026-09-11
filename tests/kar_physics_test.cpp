@@ -96,6 +96,42 @@ int main(){
  Steering steering;for(int i=0;i<60;i++)steering.controls(81,from_kph(160),30,-1,2,Steering::degrees(60));assert(steering.drift==-1);
  steering.controls(81,from_kph(99),30,-1,2,Steering::degrees(60));assert(steering.drift==0);
  steering.reset();for(int i=0;i<100;i++)steering.controls(81,from_kph(320),30,1,0,0);assert(steering.heading==Steering::degrees(20) && steering.drift==0);
+ // Independent reference-runtime probes: six impacts, two closing speeds,
+ // with and without the third nitro stage. These are observed results.
+ struct ImpactSample{ImpactResponse::Hit hit;int speed,closing,stage,after,cooldown,wrecked,height,vertical,heading,body;};
+ const ImpactSample impact_samples[]={
+  {ImpactResponse::Hit::front,227555,45511,0,170667,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::front,227555,113777,0,170667,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::rear,227555,45511,0,227555,0,0,0,0,0,0},
+  {ImpactResponse::Hit::rear,227555,113777,0,227555,0,0,0,0,0,0},
+  {ImpactResponse::Hit::head_on,227555,45511,0,56888,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::head_on,227555,113777,0,56888,8192,1,1,819200,0,0},
+  {ImpactResponse::Hit::from_left,227555,45511,0,227555,1638,0,0,0,11,11},
+  {ImpactResponse::Hit::from_left,227555,113777,0,227555,1638,0,0,0,11,11},
+  {ImpactResponse::Hit::from_right,227555,45511,0,227555,1638,0,0,0,-11,-11},
+  {ImpactResponse::Hit::from_right,227555,113777,0,227555,1638,0,0,0,-11,-11},
+  {ImpactResponse::Hit::knockdown,227555,45511,0,227555,8192,1,1,819200,0,0},
+  {ImpactResponse::Hit::knockdown,227555,113777,0,227555,8192,1,1,819200,0,0},
+  {ImpactResponse::Hit::front,227555,45511,3,227555,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::front,227555,113777,3,227555,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::rear,227555,45511,3,227555,0,0,0,0,0,0},
+  {ImpactResponse::Hit::rear,227555,113777,3,227555,0,0,0,0,0,0},
+  {ImpactResponse::Hit::head_on,227555,45511,3,227555,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::head_on,227555,113777,3,227555,1638,0,0,0,0,0},
+  {ImpactResponse::Hit::from_left,227555,45511,3,227555,1638,0,0,0,11,11},
+  {ImpactResponse::Hit::from_left,227555,113777,3,227555,1638,0,0,0,11,11},
+  {ImpactResponse::Hit::from_right,227555,45511,3,227555,1638,0,0,0,-11,-11},
+  {ImpactResponse::Hit::from_right,227555,113777,3,227555,1638,0,0,0,-11,-11},
+  {ImpactResponse::Hit::knockdown,227555,45511,3,227555,8192,1,1,819200,0,0},
+  {ImpactResponse::Hit::knockdown,227555,113777,3,227555,8192,1,1,819200,0,0},
+ };
+ for(auto s:impact_samples){
+  Motion car;car.speed=s.speed;car.stage=s.stage;Steering wheel;ImpactResponse response;
+  response.apply(s.hit,s.closing,car,wheel);
+  assert(car.speed==s.after && response.cooldown==s.cooldown && response.wrecked==bool(s.wrecked));
+  assert(response.height==s.height && response.vertical_speed==s.vertical);
+  assert(wheel.heading==s.heading && wheel.body==s.body);
+ }
  CollisionBody a,bcar;
  a.left_extent=a.right_extent=bcar.left_extent=bcar.right_extent=90;a.length=bcar.length=300;
  a.position={0,30,1,0};a.previous={277,1010,0,0};
