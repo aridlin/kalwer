@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          for test in games peggle appearance chess garden shop latest_worker expansion release_selection kar_physics kar_pixels kar game_trials game_assets; do
+          for test in games peggle appearance chess garden shop latest_worker expansion release_selection kar_physics kar_pixels kar game_trials game_assets koom_loading; do
             g++ -std=c++20 -O1 -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g tests/${test}_test.cpp -o /tmp/${test}-test
             /tmp/${test}-test
           done
@@ -47,6 +47,8 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 tests\game_trials_test.cpp /Fe:game-trials-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_test.cpp /Fe:kar-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\release_selection_test.cpp /Fe:release-selection-test.exe || exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 tests\koom_loading_test.cpp /Fe:koom-loading-test.exe || exit /b 1
+          koom-loading-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\game_assets_test.cpp /Fe:game-assets-test.exe || exit /b 1
           game-assets-test.exe || exit /b 1
           cl /nologo /std:c++20 /EHsc /W4 tests\kar_pixels_test.cpp /Fe:kar-pixels-test.exe || exit /b 1

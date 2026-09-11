@@ -11,6 +11,18 @@ struct Paint {
 };
 int main(){
  using namespace kalwer;using namespace kalwer::games;
+ Kar projection;projection.reset(42);Kar::View flat;
+ for(int i=0;i<62;++i)flat.z[i]=i*1024;
+ assert(std::abs(Kar::vehicle_scale(projection.project(flat,450))-.5)<1e-9);
+ assert(std::abs(Kar::vehicle_scale(projection.project(flat,1350))-.25)<1e-9);
+ assert(std::abs(projection.project(flat,450).y-(200.+204.*200/900))<1e-9);
+ for(int i=0;i<7;++i){assert(projection.racers[i].lane==(i%2?1:-1)*(kar_course::half_width/6));assert(projection.racers[i].road.gap_to(projection.road,Kar::segments)==(7-i)*512);assert(projection.racers[i].motion.vehicle==projection.vehicle);}
+ // A clean straight run can overtake rivals; they must not continually target
+ // a faster class as soon as the player catches them.
+ projection.key(13);projection.invulnerable=1000;
+ for(int i=0;i<3000;++i){projection.road.lateral=185;projection.steering.heading=0;projection.advance(.02);}
+ assert(projection.position<8);
+ for(int i=0;i<7;++i)for(int j=i+1;j<7;++j)if(projection.racers[i].lane==projection.racers[j].lane)assert(std::abs(projection.racers[i].road.gap_to(projection.racers[j].road,Kar::segments))>370);
  auto root=std::filesystem::temp_directory_path()/"kalwer-kar-test-data";std::filesystem::create_directories(root);wallet.path=root/"wallet";wallet.balance=100000;wallet.owned=wallet.equipped=0;
  assert(wallet.purchase(7,12000));Game game(Kind::kar,42);Paint painter;
  game.focus(true);game.key(13);game.release(13);assert(!game.started);
@@ -37,6 +49,32 @@ int main(){
   if(boosted){race.motion.stage=3;race.motion.boost_left=4096;}
   race.step();assert(boosted?block.broken:race.phase==Kar::Phase::wreck);
  }
+ // Sustained input-only driving: all three seeded races remain completable,
+ // and the default car can win without mutating its physics or opponents.
+ int driving_wins=0;
+ for(int seed:{1,42,123}){
+  Kar k;k.reset(seed);k.key(13);int crashes=0;auto phase=k.phase;double target=0;
+  for(int tick=0;tick<30000 && !k.over;++tick){
+   if(k.phase==Kar::Phase::racing){
+    double best=-1e9;
+    for(int lane:{-650,0,650}){
+     int free=16000;
+     for(const auto& r:k.racers){
+      int gap=r.road.gap_to(k.road,k.segments);
+      if((!r.police || k.police_active) && gap> -500 && gap<16000 && std::abs(r.road.lateral-lane)<240)free=std::min(free,std::max(0,gap));
+     }
+     double merit=free-std::abs(lane-k.road.lateral)*2+(lane==0?1000:0);
+     if(merit>best){best=merit;target=lane;}
+    }
+    double control=target-k.road.lateral-k.steering.heading*9;
+    k.key(1,control< -30);k.key(2,control>30);
+    if(tick%350==0){k.key(' ');k.key(' ',false);}
+   }
+   k.advance(.02);if(k.phase==Kar::Phase::wreck && phase!=k.phase)++crashes;phase=k.phase;
+  }
+  assert(k.over && crashes<12);driving_wins+=k.won;
+ }
+ assert(driving_wins>0);
  // A finish pays once; restarting does not repeat the previous payout.
  game.kar.road.lap=4;for(auto& r:game.kar.racers)r.road.lap=0;
  game.tick(.02);assert(game.over && game.won);auto balance=wallet.balance;
