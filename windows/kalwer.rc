@@ -5,8 +5,8 @@
 103 RCDATA "../vendor/everything/SDK-LICENSE.txt"
 
 1 VERSIONINFO
-FILEVERSION 0,8,2,0
-PRODUCTVERSION 0,8,2,0
+FILEVERSION 0,9,0,0
+PRODUCTVERSION 0,9,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0
 FILEOS VOS_NT_WINDOWS32
@@ -19,11 +19,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "aridlin\0"
             VALUE "FileDescription", "Kalwer application and file launcher\0"
-            VALUE "FileVersion", "0.8.2.0\0"
+            VALUE "FileVersion", "0.9.0.0\0"
             VALUE "InternalName", "kalwer\0"
             VALUE "OriginalFilename", "kalwer.exe\0"
             VALUE "ProductName", "Kalwer\0"
-            VALUE "ProductVersion", "0.8.2\0"
+            VALUE "ProductVersion", "0.9.0\0"
         END
     END
     BLOCK "VarFileInfo"
@@ -34,3 +34,5 @@ END
 
 201 RCDATA "../assets/koom/freedoom2.wad"
 202 RCDATA "../build-koom-windows/kalwer-koom.exe"
+
+203 RCDATA "../assets/koom/TimGM6mb.sf2"

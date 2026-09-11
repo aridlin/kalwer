@@ -96,6 +96,7 @@ int main(){
  Steering steering;for(int i=0;i<60;i++)steering.controls(81,from_kph(160),30,-1,2,Steering::degrees(60));assert(steering.drift==-1);
  steering.controls(81,from_kph(99),30,-1,2,Steering::degrees(60));assert(steering.drift==0);
  steering.reset();for(int i=0;i<100;i++)steering.controls(81,from_kph(320),30,1,0,0);assert(steering.heading==Steering::degrees(20) && steering.drift==0);
+ steering.reset();for(int i=0;i<100;i++)steering.controls(81,from_kph(160),30,-1,2,Steering::degrees(30),true);assert(steering.drift==0);
  // Independent reference-runtime probes: six impacts, two closing speeds,
  // with and without the third nitro stage. These are observed results.
  struct ImpactSample{ImpactResponse::Hit hit;int speed,closing,stage,after,cooldown,wrecked,height,vertical,heading,body;};

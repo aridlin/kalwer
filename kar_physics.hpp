@@ -44,7 +44,7 @@ struct Motion {
         boost_left=from_ms(duration);drain_per_ms=costs[stage]*unit/duration;
         return true;
     }
-    void step(int milliseconds,bool braking=false,bool drifting=false,int surface_loss=0) {
+    void step(int milliseconds,bool braking=false,bool drifting=false,int surface_loss=0,int curve=0,int steering=0,int grade=0) {
         milliseconds=std::clamp(milliseconds,0,100);if(!milliseconds)return;
         int dt=from_ms(milliseconds);const auto& car=vehicles[vehicle];
         while(gear<6 && speed>=from_kph(car.gears[gear]))++gear;
@@ -52,11 +52,22 @@ struct Motion {
         constexpr int extra[]={0,10,20,30,50};
         int target=braking?0:from_kph(car.gears[gear])+from_kph(car.maximum)*extra[stage]/100;
         target=target*(100-std::clamp(surface_loss,0,100))/100;
+        bool turning_against_curve=!drifting && curve*steering<0;
+        if(turning_against_curve && speed>=from_kph(120))target=std::max(from_kph(120),speed-((speed/100)>>3));
         int rise=from_kph(car.gears[gear])-from_kph(car.gears[gear-1]);
         constexpr int acceleration_bonus[]={0,30,50,80,250};
         int acceleration=rise*(100+acceleration_bonus[stage])/(from_ms(car.gear_ms[gear])*100);
-        if(braking) speed=std::max(0,speed-((car.braking*dt)>>(drifting?0:1)));
-        else if(speed>target) {int drop=dt*acceleration;speed=std::max(target,speed-(drop>>1)-(drop>>2));}
+        if(target==0) {
+            int grade_degrees=(grade*360)>>11;
+            int force=car.braking*unit*(100+grade_degrees*4)/100;
+            int reduction=int((std::int64_t(force)*dt+unit/2)>>12)>>(drifting?0:1);
+            speed=std::max(0,speed-reduction);
+        }
+        else if(speed>target) {
+            int drop=dt*acceleration;
+            int reduction=!drifting && curve?(turning_against_curve?drop+(drop>>1)+(drop>>2):drop):(drop>>1)+(drop>>2);
+            speed=std::max(target,speed-reduction);
+        }
         else speed=std::min(target,speed+dt*acceleration);
         // Longitudinal travel before track curvature and heading projection.
         travel+=(std::int64_t(road_speed())*dt+unit/2)/unit;
@@ -84,6 +95,7 @@ struct Steering {
             drift=0;drift_entering=drift_exiting=false;heading=body=held_time=0;
         }
         if(!drift && !airborne && !crashed && speed>=from_kph(100) &&
+           std::abs(remaining_curve)>degrees(40) &&
            (manual_drift || held_time>4000) && direction*curve<0){
             drift=direction;drift_entering=true;drift_exiting=false;heading=0;
         }

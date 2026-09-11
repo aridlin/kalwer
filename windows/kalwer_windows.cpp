@@ -83,7 +83,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.8.2";
+constexpr wchar_t kKalwerVersion[] = L"0.9.0";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -861,8 +861,8 @@ std::uint32_t bounded_unsigned(const std::string& value, std::uint32_t fallback,
 void load_settings() {
     kalwer::koom::install_bundle=[](const std::filesystem::path& dir){
         std::filesystem::create_directories(dir);
-        for(int id:{201,202}) {
-            auto path=dir/(id==201?"freedoom2.wad":"kalwer-koom.exe");if(id==201 && std::filesystem::exists(path))continue;
+        for(int id:{201,202,203}) {
+            auto path=dir/(id==201?"freedoom2.wad":id==202?"kalwer-koom.exe":"TimGM6mb.sf2");if(id!=202 && std::filesystem::exists(path))continue;
             auto resource=FindResourceW(nullptr,MAKEINTRESOURCEW(id),RT_RCDATA);if(!resource)return false;
             auto loaded=LoadResource(nullptr,resource);if(!loaded)return false;
             if(!kalwer::koom::write_bundle_file(path,LockResource(loaded),SizeofResource(nullptr,resource)))return false;
@@ -1681,7 +1681,7 @@ void close_popup(bool background, bool terminate) {
         static_cast<float>(state.popup_line_ms + 170 + state.popup_expand_ms));
     state.popup_closed_at = std::chrono::steady_clock::now();
     state.popup_closing = true;
-    if (state.popup_game) {state.popup_game->focused = false;state.popup_game->koom.focus(false);}
+    if (state.popup_game) {state.popup_game->focus(false);}
     state.popup_selecting = false; state.popup_pressed = PopupButton::none;
     ReleaseCapture();
     CommandJob* job = state.popup_job;
@@ -1874,7 +1874,7 @@ void activate_selection(bool elevated = false) {
         const auto name = utf8(result.payload);
         if (kalwer::games::is_command(name)) {
             state.popup_game = std::make_unique<kalwer::games::Game>(kalwer::games::command_kind(name));
-            state.popup_game->focused = GetForegroundWindow() == state.window;
+            state.popup_game->focus(GetForegroundWindow() == state.window);
             state.game_last = std::chrono::steady_clock::now();
             state.opening = state.closing = false;
             open_popup({kalwer::games::name(state.popup_game->kind), ""});
@@ -1882,7 +1882,7 @@ void activate_selection(bool elevated = false) {
         else if(name=="/wad-import") {
             auto query=window_text(state.edit);auto path=trim_copy(query.substr(std::min<size_t>(11,query.size())));
             if(path.size()>1 && path.front()==L'"' && path.back()==L'"')path=path.substr(1,path.size()-2);
-            open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(path)});
+            open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(std::filesystem::path(path))});
         }
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
@@ -3559,8 +3559,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             break;
         case WM_ACTIVATE:
             if (state.popup_game) {
-                state.popup_game->focused = LOWORD(wparam) != WA_INACTIVE && !state.popup_closing;
-                state.popup_game->koom.focus(state.popup_game->focused);
+                state.popup_game->focus(LOWORD(wparam) != WA_INACTIVE && !state.popup_closing);
                 state.game_last=std::chrono::steady_clock::now(); state.render_dirty=true;
             }
             if (LOWORD(wparam) != WA_INACTIVE) SetFocus(state.edit);

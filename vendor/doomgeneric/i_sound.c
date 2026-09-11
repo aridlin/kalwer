@@ -18,9 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
-#include <SDL_mixer.h>
-#endif
+// Kalwer: the native audio adapter does not depend on SDL_mixer.
 
 #include "config.h"
 #include "doomfeatures.h"

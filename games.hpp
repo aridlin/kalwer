@@ -7,6 +7,7 @@
 #include "tetris.hpp"
 #include "breakout.hpp"
 #include "koom.hpp"
+#include "kar.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -43,7 +44,7 @@ struct Game {
     Garden garden;
     Chess chess_game;
     Shop shop;
-    Tetris tetris; Breakout breakout; kalwer::koom::Game koom; int catalog_selection=0;
+    Tetris tetris; Breakout breakout; Kar kar; kalwer::koom::Game koom; int catalog_selection=0;
     bool wrap=false,aurora=false;
     explicit Game(Kind k, unsigned seed = std::random_device{}()) : kind(k), random(seed) { reset(); }
     void reset() {
@@ -52,7 +53,7 @@ struct Game {
         mines.fill(0); revealed.fill(false); flagged.fill(false); cursor = 40;
         wrap=wallet.uses(0);aurora=wallet.uses(4);
         arcade.reset(random,wallet.uses(3));garden.reset(random(),wallet.uses(1));chess_game.reset(chess_game.local,wallet.uses(2));
-        tetris.reset(random());breakout.reset(random());if(kind==Kind::koom)koom.reset();
+        tetris.reset(random());breakout.reset(random());kar.reset(random());if(kind==Kind::koom)koom.reset();
         if(kind==Kind::shop || kind==Kind::catalog)started=true;
     }
     void spawn_food() {
@@ -86,9 +87,10 @@ struct Game {
         if(score==71) over=won=true;
     }
     void sync_arcade() { score=arcade.score; started=arcade.started; over=arcade.over; won=arcade.won; }
-    void sync_new(){if(kind==Kind::tetris){score=tetris.score;started=tetris.started;over=tetris.over;won=tetris.won;}if(kind==Kind::breakout){score=breakout.score;started=breakout.started;over=breakout.over;won=breakout.won;}}
+    void sync_new(){if(kind==Kind::kar){score=kar.score;started=kar.started;over=kar.over;won=kar.won;}if(kind==Kind::tetris){score=tetris.score;started=tetris.started;over=tetris.over;won=tetris.won;}if(kind==Kind::breakout){score=breakout.score;started=breakout.started;over=breakout.over;won=breakout.won;}}
     void sync_extra(){if(kind==Kind::garden){score=garden.kills*10;started=garden.started;over=garden.over;won=garden.won;}if(kind==Kind::chess){score=chess_game.position.ply;started=chess_game.started;over=chess_game.over;won=chess_game.won;}}
-    void release(int key){if(kind==Kind::koom)koom.key(key,false);}
+    void focus(bool active){focused=active;koom.focus(active && kind==Kind::koom);kar.focus(active);}
+    void release(int key){if(kind==Kind::koom)koom.key(key,false);if(kind==Kind::kar)kar.key(key,false);}
     void key(int key) { // arrows: 1 left, 2 right, 3 up, 4 down; other keys ASCII
         if(!focused) return;
         if(kind==Kind::catalog){
@@ -102,6 +104,7 @@ struct Game {
         if(kind==Kind::chess && key=='h'){chess_game.local=!chess_game.local;reset();return;}
         if(key=='r' || key=='R') { reset(); return; }
         if(kind==Kind::koom){koom.key(key);return;}
+        if(kind==Kind::kar){kar.key(key);sync_new();return;}
         if(over) return;
         if(kind==Kind::tetris){tetris.key(key);sync_new();return;}
         if(kind==Kind::breakout){breakout.key(key);sync_new();return;}
@@ -150,13 +153,14 @@ struct Game {
         if((kind==Kind::tetris || kind==Kind::breakout) && over && !reward_claimed){int amount=kind==Kind::tetris?std::min(250,tetris.lines*4+tetris.score/200):std::min(250,breakout.score/30+(won?80:0));if(amount==0)reward_claimed=true;else if(wallet.credit(amount,won)){reward_claimed=true;reward=amount;}}
         if(over && won) {
             if(!reward_claimed && kind!=Kind::tetris && kind!=Kind::breakout) {
-                int amount=kind==Kind::peggle?50+arcade.balls*5:kind==Kind::minesweeper?30:kind==Kind::garden?(garden.night?100:75):kind==Kind::chess?(chess_game.local?0:60):wrap?30:75;
+                int amount=kind==Kind::peggle?50+arcade.balls*5:kind==Kind::minesweeper?30:kind==Kind::kar?std::min(250,100+(8-kar.position)*5+kar.score/1000):kind==Kind::garden?(garden.night?100:75):kind==Kind::chess?(chess_game.local?0:60):wrap?30:75;
                 if(amount==0)reward_claimed=true;
                 if(!kalwer::wallet.path.empty() && kalwer::wallet.credit(amount)) { reward_claimed=true; reward=amount; }
             }
             celebration+=std::min(dt,.05);
         }
         if(kind==Kind::shop || kind==Kind::catalog)return;
+        if(kind==Kind::kar){kar.advance(dt);elapsed=kar.elapsed;sync_new();return;}
         if(kind==Kind::tetris || kind==Kind::breakout){dt=std::min(dt,.05);if(started && !over)elapsed+=dt;if(kind==Kind::tetris)tetris.advance(dt);else breakout.advance(dt);sync_new();return;}
         if(kind==Kind::garden || kind==Kind::chess){dt=std::min(dt,.05);if(started && !over)elapsed+=dt;if(kind==Kind::garden)garden.advance(dt);else chess_game.advance(dt);sync_extra();return;}
         if(kind==Kind::peggle) {
@@ -190,6 +194,12 @@ struct Game {
         if(kind==Kind::catalog){for(int i=0;i<9;i++){auto k=catalog_games[i];double y=55+i*42;p.rect(24,y,372,38,i==catalog_selection?0x2b5145:0x112e29);p.text(34,y+25,16,name(k),text);p.text(225,y+25,12,unlocked(k)?"PLAY":"/shop: "+std::to_string(Shop::items[unlock_id(k)].cost)+" koins",unlocked(k)?green:orange);}p.text(24,465,11,"Arrows + Enter or click a game",muted);return;}
         if(!unlocked(kind)){p.text(35,190,25,std::string(name(kind))+" is locked",green);p.text(35,228,16,std::to_string(Shop::items[unlock_id(kind)].cost)+" koins in /shop",orange);p.text(35,264,12,"Buy once with koins earned inside Kalwer.",text);return;}
         if(kind==Kind::koom){koom.draw(p);return;}
+        if(kind==Kind::kar){
+            kar.draw(p);
+            if(!focused){p.rect(52,208,316,48,0x0a211b);p.text(65,237,16,"PAUSED - focus to resume",green);}
+            if(over && reward_claimed && reward>0)p.text(65,435,15,"+"+std::to_string(reward)+" koins!",orange);
+            return;
+        }
         if(kind==Kind::shop){shop.draw(p);return;}
         std::string status=kind==Kind::minesweeper?"Flags "+std::to_string(std::count(flagged.begin(),flagged.end(),true))+" / 10": "Score "+std::to_string(score);
         if(kind!=Kind::peggle) status+="   Time "+std::to_string(int(elapsed))+"s";

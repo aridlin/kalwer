@@ -10,6 +10,8 @@
 #include <io.h>
 #include <fcntl.h>
 #endif
+void KoomAudioInit(const char*,int);
+void KoomAudioFrame(unsigned int);
 static uint32_t ticks=0;
 static unsigned char keys[256],previous[256];
 void DG_Init(void){}
@@ -24,10 +26,13 @@ int main(int argc,char** argv){
     _setmode(framefd,_O_BINARY);_setmode(0,_O_BINARY);
 #endif
     FILE* frames=fdopen(framefd,"wb");setvbuf(frames,NULL,_IONBF,0);
+    const char* font="TimGM6mb.sf2";int audio=1;
+    for(int i=1;i<argc;i++){if(!strcmp(argv[i],"-soundfont") && i+1<argc)font=argv[++i];else if(!strcmp(argv[i],"-nosound"))audio=0;}
+    KoomAudioInit(font,audio);
     doomgeneric_Create(argc,argv);
     uint32_t completed_maps=0;int intermission=0;
     while(fread(keys,1,sizeof(keys),stdin)==sizeof(keys)) {
-        ticks+=29;doomgeneric_Tick();
+        ticks+=29;doomgeneric_Tick();KoomAudioFrame(29);
         if(gamestate==GS_INTERMISSION && !intermission)++completed_maps;
         intermission=gamestate==GS_INTERMISSION;
         uint32_t header[4]={0x4b4f4f4d,DOOMGENERIC_RESX,DOOMGENERIC_RESY,completed_maps};

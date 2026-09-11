@@ -18,7 +18,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB KOOM_ENGINE_SOURCES ../vendor/doomgeneric/*.c ../vendor/doomgeneric/*.h)
 add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/../build-koom-windows/kalwer-koom.exe
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../koom/build.py --windows
-    DEPENDS ${KOOM_ENGINE_SOURCES} ../koom/host.c ../koom/build.py)
+    DEPENDS ${KOOM_ENGINE_SOURCES} ../koom/host.c ../koom/audio.c ../koom/build.py ../koom/runtime.manifest ../vendor/miniaudio/miniaudio.h ../vendor/TinySoundFont/tsf.h ../vendor/TinySoundFont/tml.h)
 add_custom_target(koom-runtime DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../build-koom-windows/kalwer-koom.exe)
 add_dependencies(kalwer-windows koom-runtime)
 set_property(SOURCE kalwer.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../build-koom-windows/kalwer-koom.exe)

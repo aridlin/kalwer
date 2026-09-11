@@ -61,7 +61,7 @@ inline GtkWidget* create_game_canvas(GtkWidget* window, Kind kind,std::function<
     g_signal_connect_object(window,"notify::is-active",G_CALLBACK(+[](GObject* window,GParamSpec*,gpointer data) {
         auto* canvas=GTK_WIDGET(data);
         auto* s=static_cast<GtkGame*>(g_object_get_data(G_OBJECT(canvas),"kalwer-game"));
-        s->game.focused=gtk_window_is_active(GTK_WINDOW(window)); s->game.koom.focus(s->game.focused); s->last=g_get_monotonic_time();
+        s->game.focus(gtk_window_is_active(GTK_WINDOW(window))); s->last=g_get_monotonic_time();
         gtk_gl_area_queue_render(GTK_GL_AREA(canvas));
     }),canvas,G_CONNECT_DEFAULT);
     g_signal_connect(canvas,"button-press-event",G_CALLBACK(+[](GtkWidget* widget,GdkEventButton* e,gpointer data)->gboolean {

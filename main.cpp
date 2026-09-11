@@ -33,6 +33,7 @@
 #include <vector>
 
 extern "C" {
+extern const unsigned char _binary_assets_koom_TimGM6mb_sf2_start[],_binary_assets_koom_TimGM6mb_sf2_end[];
 extern const unsigned char _binary_assets_koom_freedoom2_wad_start[],_binary_assets_koom_freedoom2_wad_end[];
 extern const unsigned char _binary_build_koom_kalwer_koom_start[],_binary_build_koom_kalwer_koom_end[];
 }
@@ -59,7 +60,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.8.2";
+constexpr const char* kKalwerVersion = "0.9.0";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -522,6 +523,8 @@ void load_settings() {
     kalwer::appearance.load();
     kalwer::koom::install_bundle=[](const std::filesystem::path& dir){
         std::filesystem::create_directories(dir);
+        auto font=dir/"TimGM6mb.sf2";
+        if(!std::filesystem::exists(font) && !kalwer::koom::write_bundle_file(font,_binary_assets_koom_TimGM6mb_sf2_start,_binary_assets_koom_TimGM6mb_sf2_end-_binary_assets_koom_TimGM6mb_sf2_start))return false;
         auto wad=dir/"freedoom2.wad";auto runtime=dir/"kalwer-koom";
         if(!std::filesystem::exists(wad) && !kalwer::koom::write_bundle_file(wad,_binary_assets_koom_freedoom2_wad_start,_binary_assets_koom_freedoom2_wad_end-_binary_assets_koom_freedoom2_wad_start))return false;
         if(!kalwer::koom::write_bundle_file(runtime,_binary_build_koom_kalwer_koom_start,_binary_build_koom_kalwer_koom_end-_binary_build_koom_kalwer_koom_start))return false;
@@ -2621,7 +2624,7 @@ void activate_selection(bool elevated = false) {
         else if(name=="/wad-import") {
             std::string path=trim_copy(std::string(gtk_entry_get_text(GTK_ENTRY(state.entry))).substr(std::min<size_t>(11,std::strlen(gtk_entry_get_text(GTK_ENTRY(state.entry))))));
             if(path.size()>1 && ((path.front()=='"' && path.back()=='"') || (path.front()=='\'' && path.back()=='\'')))path=path.substr(1,path.size()-2);
-            open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(path)});
+            open_popup({"WAD IMPORT",path.empty()?"Use /wad-import <path to .wad>":kalwer::koom::import_wad(kalwer::koom::utf8_path(path))});
         }
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
