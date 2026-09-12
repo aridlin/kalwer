@@ -50,7 +50,7 @@ jobs:
       - name: Native popup and Koom device tests
         timeout-minutes: 8
         working-directory: android
-        run: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=pl.aridlin.kalwer.GameTest
+        run: ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=pl.aridlin.kalwer.GameTest,pl.aridlin.kalwer.WidgetUpdateTest
       - name: Collect device logs
         if: always()
         run: timeout 20 adb logcat -d > /tmp/kalwer-android-logcat.txt || true

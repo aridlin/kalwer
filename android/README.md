@@ -150,3 +150,16 @@ diffusion or repeated capture. Launcher and popup modes are independent, with
 Keep Halftone toggles. Threshold is always black and white; a separate B/W
 checkbox applies to other backdrops without changing the UI theme. Unsupported
 GPU contexts keep the transparent surface and report that capture is unavailable.
+
+## Home-screen widget and updates
+
+Add **Kalwer search** from your home screen’s widget picker. It is a resizable
+search bar: tap it to open a fresh Kalwer search with the keyboard ready. Android
+widgets hand text entry to the activity; there is no background polling for the widget.
+
+Kalwer checks for updates in the background when opened, at most once every six
+hours, and downloads newer APKs automatically. Downloads must match the release
+SHA-256, Kalwer package name and installed signing certificate, and have a newer
+version code. A prompt offers installation through Android’s package installer;
+Android may first ask you to allow installs from Kalwer. `/updates` checks manually
+and also includes prereleases. Checking/downloading never blocks launcher startup.
