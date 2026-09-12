@@ -3,4 +3,7 @@
     <string name="apps_waiting">Waiting for installed apps…</string>
     <string name="opacity_label">Background opacity: %1$d%%</string>
     <string name="retention_label">Remember query for: %1$ds</string>
+    <string name="widget_name">Kalwer search</string>
+    <string name="widget_search">Search the vault</string>
+    <string name="widget_description">Open Kalwer with a fresh search and keyboard ready.</string>
 </resources>

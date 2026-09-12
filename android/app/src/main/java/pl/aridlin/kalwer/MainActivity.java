@@ -69,6 +69,8 @@ public final class MainActivity extends Activity {
     private int selected;
     private boolean capturing;
     private GamePopup gamePopup;
+    private AppUpdates updates;
+    boolean updatesVisible(){return !isFinishing() && !isDestroyed() && gamePopup==null && hasWindowFocus();}
     private String rewardedCalculation="";
     private static final int IMPORT_WAD=904;
     private static final String[] GAME_COMMANDS={"/snake","/minesweeper","/peggle","/pvz","/chess","/shop","/tetris","/breakout","/kar","/koom","/games"};
@@ -125,11 +127,12 @@ public final class MainActivity extends Activity {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
         buildUi();
+        updates=new AppUpdates(this);
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0, ()->{if(gamePopup!=null)gamePopup.closeAnimated();else finish();});
         }
         String restored = state != null ? state.getString("query", "") : retainedQuery();
-        query.setText(restored);
+        query.setText(SearchWidget.SEARCH.equals(getIntent().getAction())?"":restored);
         query.setSelection(query.length());
         if (state != null) selected = state.getInt("selected", 0);
         refreshResults();
@@ -144,6 +147,7 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         loadApps();
+        if(updates!=null)updates.resume();
         if(gamePopup!=null)gamePopup.setResumed(true);
         showKeyboard();
     }
@@ -151,8 +155,11 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if(gamePopup!=null)return;
-        query.setText(retainedQuery());
+        if(gamePopup!=null){
+            if(!SearchWidget.SEARCH.equals(intent.getAction()))return;
+            gamePopup.dismiss();gamePopup=null;root.setVisibility(View.VISIBLE);
+        }
+        query.setText(SearchWidget.SEARCH.equals(intent.getAction())?"":retainedQuery());
         query.setSelection(query.length());
         showKeyboard();
     }
@@ -337,7 +344,9 @@ public final class MainActivity extends Activity {
         if (query == null || adapter == null) return;
         results.clear();
         String q = query.getText().toString().trim();
-        if (q.equals("/settings") || q.equals("/config")) {
+        if(q.equals("/updates")){
+            results.add(new Result("Kalwer updates","Check and install updates","↓",()->updates.check(true),null));
+        } else if (q.equals("/settings") || q.equals("/config")) {
             results.add(new Result("Kalwer settings", "Transparency, query memory & controls", "⚙", this::settings, null));
         } else if(q.startsWith("/")) {
             if(q.equals("/unlockall"))results.add(new Result("Unlock games","","",()->openGame(10,true),null));
