@@ -4,6 +4,10 @@
 #include <iostream>
 int main() {
     namespace n=kalwer::native;namespace u=kalwer::unicode;namespace fs=std::filesystem;
+    for(const auto& entry:u::names) {
+        assert(entry.block<std::size(u::name_blocks));
+        assert(*u::name_text(entry));
+    }
     auto z=u::search("+200c");assert(z.size()==1&&z[0].name=="ZERO WIDTH NON-JOINER"&&z[0].text=="\xe2\x80\x8c");
     z=u::search("+zero");assert(z.size()>10);assert(std::any_of(z.begin(),z.end(),[](auto& x){return x.code==0x200b;}));
     assert(u::search("+U+1f600")[0].text=="\xf0\x9f\x98\x80");

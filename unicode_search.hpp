@@ -7,10 +7,9 @@
 #include <vector>
 
 namespace kalwer::unicode {
-struct Name { uint32_t code; const char* name; };
-inline constexpr Name names[] = {
+struct Name { uint32_t code; uint16_t block, offset; };
 #include "vendor/unicode/names.inc"
-};
+inline const char* name_text(const Name& n) { return name_blocks[n.block]+n.offset; }
 struct Match { uint32_t code; std::string name, text; };
 inline bool scalar(uint32_t c) { return c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff); }
 inline std::string utf8(uint32_t c) {
@@ -38,11 +37,11 @@ inline std::vector<Match> search(std::string query) {
         // are not Unicode scalar values. Do not offer either as copyable text.
         if(!scalar(code)||code==0) return result;
         auto it=std::lower_bound(std::begin(names),std::end(names),code,[](const Name& n,uint32_t c){return n.code<c;});
-        std::string name=it!=std::end(names)&&it->code==code?it->name:"UNNAMED CODE POINT";
+        std::string name=it!=std::end(names)&&it->code==code?name_text(*it):"UNNAMED CODE POINT";
         result.push_back({code,name,utf8(code)});return result;
     }
-    for(const auto& n:names) if(std::string_view(n.name).find(query)!=std::string_view::npos)
-        result.push_back({n.code,n.name,utf8(n.code)});
+    for(const auto& n:names) if(std::string_view(name_text(n)).find(query)!=std::string_view::npos)
+        result.push_back({n.code,name_text(n),utf8(n.code)});
     return result;
 }
 } // namespace kalwer::unicode
