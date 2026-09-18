@@ -28,3 +28,10 @@ included. Imported WADs remain in the user's local Kalwer data directory.
 Kalwer changes `vendor/doomgeneric/i_sound.c` to remove its unused SDL_mixer
 include. The audio adapter mixes Doom DMX samples and synthesizes MUS/MIDI music.
 Audio libraries are linked only into the separate GPL Koom helper.
+
+## Unicode character names
+
+`vendor/unicode/names.inc` contains Unicode 16.0.0 character names generated from
+Python's `unicodedata` database. See `vendor/unicode/LICENSE.txt` for the Unicode
+License V3. Regenerate using `python tools/generate_unicode.py` with a Python
+installation whose Unicode database is version 16.0.0.

@@ -3,6 +3,7 @@
 #include "popup_placement.hpp"
 #include "passive_koins.hpp"
 #include "calculator_format.hpp"
+#include "native_results.hpp"
 #include "system_file_index.hpp"
 #include "launcher_commands.hpp"
 #include "update_status.hpp"
@@ -2749,11 +2750,18 @@ void activate_selection(bool elevated = false) {
         if (job) start_command_popup(job->command, job->session);
         return;
     }
-    if (result.provider == "kalwer-calculator") {
+    if (result.provider == "kalwer-info") return;
+    if (result.provider == "kalwer-ssh") {
+        // Only validated concrete aliases are accepted; OpenSSH resolves all
+        // connection options, keys and proxy settings from the user's config.
+        if(kalwer::ssh::safe_alias(result.identifier)) start_command_popup("ssh " + result.identifier);
+        return;
+    }
+    if (result.provider == "kalwer-copy" || result.provider == "kalwer-calculator") {
         GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
         gtk_clipboard_set_text(clipboard, result.identifier.c_str(), -1);
         gtk_clipboard_store(clipboard);
-        kalwer::calculator_completed(gtk_entry_get_text(GTK_ENTRY(state.entry)));
+        if(result.provider=="kalwer-calculator") kalwer::calculator_completed(gtk_entry_get_text(GTK_ENTRY(state.entry)));
         hide_kalwer();
         return;
     }
@@ -3190,6 +3198,16 @@ void on_entry_changed(GtkEditable*, gpointer) {
     }
     if (!state.applying_completion) clear_completion();
     const std::string input = gtk_entry_get_text(GTK_ENTRY(state.entry));
+    if (auto rows = kalwer::native::search(input, g_get_home_dir())) {
+        std::vector<Result> results;
+        for (const auto& row : *rows) {
+            Result r; r.text=row.title; r.subtext=row.subtitle; r.identifier=row.payload;
+            r.provider=row.action==kalwer::native::Action::Copy?"kalwer-copy":row.action==kalwer::native::Action::Ssh?"kalwer-ssh":"kalwer-info";
+            r.icon=row.action==kalwer::native::Action::Ssh?"utilities-terminal":"accessories-character-map";
+            results.push_back(std::move(r));
+        }
+        show_local_results(std::move(results));return;
+    }
     if (!input.empty() && input.front() == ':') {
         file_request = file_index.request(input.substr(1));
         file_status = "Searching indexed files…";

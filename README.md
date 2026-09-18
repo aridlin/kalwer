@@ -13,6 +13,7 @@ comes from the finished launcher below it.
 
 ## Features
 
+- Native Unicode lookup (`+200b`, `+zero`), emoticon search (`/wemote`), and SSH host search (`/wssh`).
 - System-wide `:` file search through Everything on Windows and plocate on Linux.
 - GPU-backed, animated halftone coverage over the fully rendered interface.
 - Scrollable Elephant application search with persistent, unlimited favourites
@@ -53,6 +54,19 @@ application ID toggles the window without constructing a new GTK process.
 - Five on-screen rows are interactive. Mouse wheel, arrows, and Page Up/Down
   scroll later results into those selectable positions; the lower rows are a
   non-interactive halftone preview.
+- `+200c` finds U+200C ZERO WIDTH NON-JOINER; `+200b` finds ZERO WIDTH SPACE.
+  `+zero` lists all matching Unicode names (case insensitive). Enter copies the
+  selected character, including invisible characters. Hexadecimal code points
+  accept `+1f600`, `+U+1F600` and `+0x1f600`. Names use bundled Unicode 16.0 data;
+  lookup is offline. NUL and surrogate code points are not offered for copying.
+- `/wemote` lists built-in text emoticons and kaomoji directly in the launcher.
+  `/wemote shrug` filters by face, name, category or tags. Enter copies the face.
+- `/wssh` lists concrete aliases from `~/.ssh/config`; `/wssh server` filters them.
+  Include files and `*`/`?` Include globs are supported (bounded to 128 files and
+  16 levels). Alias names use letters, numbers, dots, underscores and hyphens;
+  wildcard Host patterns are not selectable. Enter starts `ssh ALIAS` in the
+  terminal popup. OpenSSH handles keys, usernames, proxy commands and other
+  connection settings. No private SSH configuration is bundled with Kalwer.
 - `> command` runs immediately in an interactive VTE popup. Tab and Shift+Tab
   cycle Zsh-resolved command/path completions.
 - Command popups can copy output, continue the same tmux session in Ghostty, or

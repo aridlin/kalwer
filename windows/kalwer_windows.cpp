@@ -1,6 +1,7 @@
 #include "../release_selection.hpp"
 #include "../passive_koins.hpp"
 #include "../calculator_format.hpp"
+#include "../native_results.hpp"
 #include "../latest_worker.hpp"
 #include "../system_file_index.hpp"
 #include "../launcher_commands.hpp"
@@ -1267,7 +1268,14 @@ void update_results() {
     const std::wstring query = lower_copy(trim_copy(raw_query));
     std::vector<AppEntry> filtered;
 
-    if (!raw_query.empty() && raw_query.front() == L'/') {
+    const auto home=std::filesystem::path(_wgetenv(L"USERPROFILE")?_wgetenv(L"USERPROFILE"):L".");
+    if (auto rows=kalwer::native::search(utf8(raw_query),home)) {
+        for(const auto& row:*rows) {
+            AppEntry r;r.title=wide(row.title);r.subtitle=wide(row.subtitle);r.payload=wide(row.payload);
+            r.link=row.action==kalwer::native::Action::Copy?L"::copy":row.action==kalwer::native::Action::Ssh?L"::ssh":L"::info";
+            filtered.push_back(std::move(r));
+        }
+    } else if (!raw_query.empty() && raw_query.front() == L'/') {
         for (const auto* c : kalwer::matching_commands(utf8(raw_query))) {
             AppEntry r; r.title = wide(std::string(c->name)); r.subtitle = wide(std::string(c->description));
             r.link = L"::slash"; r.payload = r.title; filtered.push_back(std::move(r));
@@ -1935,7 +1943,14 @@ void activate_selection(bool elevated = false) {
         return;
     }
     if (result.link == L"::settings") { open_settings_popup(); return; }
-    if (result.link == L"::calculator") {
+    if (result.link == L"::info") return;
+    if (result.link == L"::ssh") {
+        if(kalwer::ssh::safe_alias(utf8(result.payload))) start_command_popup(L"ssh " + result.payload);
+        return;
+    }
+    if (result.link == L"::copy") {
+        if(!copy_text_to_clipboard(result.payload))return;
+    } else if (result.link == L"::calculator") {
         if(copy_text_to_clipboard(result.payload.empty() ? result.title : result.payload))kalwer::calculator_completed(utf8(window_text(state.edit)));
     } else if (result.link == L"::google") {
         const std::wstring url = L"https://www.google.com/search?q=" +

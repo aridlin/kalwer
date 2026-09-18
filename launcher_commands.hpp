@@ -10,6 +10,8 @@ struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
     Command{"/kar-import", "Install Kar artwork: /kar-import <path to art.karp>", ""},
     Command{"/wad-import", "Install a Doom-compatible WAD: /wad-import <path>", ""},
+    Command{"/wemote", "Search and copy emoticons", "/wemote "},
+    Command{"/wssh", "Search SSH hosts and connect", "/wssh "},
     Command{"/games", "All games and permanent unlocks", ""},
     Command{"/tetris", "Falling blocks, line clears and ghost piece", ""},
     Command{"/breakout", "Paddle, ball and three brick boards", ""},
@@ -57,7 +59,7 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     return matches;
 }
 inline PopupDocument help() {
-    PopupDocument result{"KALWER HELP", "SEARCH MODES\nText: apps    :text: files\n> command: shell    ? text: web\n< : background jobs\n\nCOMMANDS\n"};
+    PopupDocument result{"KALWER HELP", "SEARCH MODES\nText: apps    :text: files\n> command: shell    ? text: web\n< : background jobs    + : Unicode\n\nCOMMANDS\n"};
     for (const auto& command : commands) result.body += std::string(command.name) + "  " + std::string(command.description) + "\n";
     result.body += "\nKEYBOARD\nTab: accept suggestion\nUp/Down: choose result\nEnter: open/run    Esc: close\nCtrl+Enter: sudo / administrator\nShift+Enter: multiline input\nCtrl+Shift+Enter: favorite app\n\nFiles: system-wide names and paths.\nWindows: Everything; Linux: plocate.\n/index: status    /index-setup: setup.\nPopup: select/copy text; scroll to read.\nCtrl+Shift+C: copy all popup text.\n";
     return result;
