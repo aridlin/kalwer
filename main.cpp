@@ -64,7 +64,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.11.0";
+constexpr const char* kKalwerVersion = "0.11.1";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -73,6 +73,7 @@ struct Result {
     std::string text;
     std::string subtext;
     std::string icon;
+    std::string character_preview;
     std::string provider;
     std::string action;
     std::string favorite_action;
@@ -693,6 +694,27 @@ std::size_t byte_offset_for_character(const std::string& text, int character) {
     return std::min<std::size_t>(position - start, text.size());
 }
 
+void draw_character_preview(cairo_t* cr, const std::string& text, double x, double y) {
+    PangoLayout* layout = pango_cairo_create_layout(cr);
+    PangoFontDescription* font = pango_font_description_from_string("Sans 22");
+    pango_layout_set_font_description(layout, font);
+    pango_layout_set_text(layout, text.c_str(), -1);
+    PangoRectangle ink;
+    pango_layout_get_pixel_extents(layout, &ink, nullptr);
+    const double scale = std::min(1.0, 34.0 / std::max(1, std::max(ink.width, ink.height)));
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, 38, 38);
+    cairo_clip(cr);
+    cairo_translate(cr, x + 19, y + 19);
+    cairo_scale(cr, scale, scale);
+    cairo_move_to(cr, -ink.x - ink.width / 2.0, -ink.y - ink.height / 2.0);
+    theme_source_rgba(cr, 0.70, 0.94, 0.78, 1.0);
+    pango_cairo_show_layout(cr, layout);
+    cairo_restore(cr);
+    pango_font_description_free(font);
+    g_object_unref(layout);
+}
+
 void draw_layout(cairo_t* cr, const std::string& text, double x, double y,
                  const char* font, double red, double green, double blue,
                  const std::vector<int>* highlighted = nullptr) {
@@ -853,7 +875,9 @@ void draw_results(cairo_t* cr) {
         theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
         cairo_stroke(cr);
 
-        draw_icon(cr, result.icon, kResultX + 12, y + 10, 38);
+        if (!result.character_preview.empty())
+            draw_character_preview(cr, result.character_preview, kResultX + 12, y + 10);
+        else draw_icon(cr, result.icon, kResultX + 12, y + 10, 38);
 
         const std::string title = ellipsize_utf8(result.text, 48);
         const std::string subtext = ellipsize_utf8(
@@ -3201,7 +3225,7 @@ void on_entry_changed(GtkEditable*, gpointer) {
     if (auto rows = kalwer::native::search(input, g_get_home_dir())) {
         std::vector<Result> results;
         for (const auto& row : *rows) {
-            Result r; r.text=row.title; r.subtext=row.subtitle; r.identifier=row.payload;
+            Result r; r.text=row.title; r.subtext=row.subtitle; r.identifier=row.payload; r.character_preview=row.preview;
             r.provider=row.action==kalwer::native::Action::Copy?"kalwer-copy":row.action==kalwer::native::Action::Ssh?"kalwer-ssh":"kalwer-info";
             r.icon=row.action==kalwer::native::Action::Ssh?"utilities-terminal":"accessories-character-map";
             results.push_back(std::move(r));

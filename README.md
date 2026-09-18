@@ -55,7 +55,10 @@ application ID toggles the window without constructing a new GTK process.
   scroll later results into those selectable positions; the lower rows are a
   non-interactive halftone preview.
 - `+200c` finds U+200C ZERO WIDTH NON-JOINER; `+200b` finds ZERO WIDTH SPACE.
-  `+zero` lists all matching Unicode names (case insensitive). Enter copies the
+  `+zero` lists all matching Unicode names (case insensitive). `+fe` shows the
+  exact U+00FE first and then all name matches; use `+U+FE` for only the exact
+  code point. Results preview the actual glyph, with a space marker for invisible
+  characters and a dotted circle for combining marks. Enter copies the
   selected character, including invisible characters. Hexadecimal code points
   accept `+1f600`, `+U+1F600` and `+0x1f600`. Names use bundled Unicode 16.0 data;
   lookup is offline. NUL and surrogate code points are not offered for copying.

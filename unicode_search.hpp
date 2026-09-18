@@ -21,13 +21,25 @@ inline std::string utf8(uint32_t c) {
     else {s+=char(0xf0|(c>>18));s+=char(0x80|((c>>12)&63));s+=char(0x80|((c>>6)&63));s+=char(0x80|(c&63));}
     return s;
 }
+struct PreviewRange { uint32_t first, last; int kind; };
+#include "vendor/unicode/preview.inc"
+inline std::string preview(uint32_t code) {
+    const auto it = std::lower_bound(std::begin(preview_ranges), std::end(preview_ranges), code,
+        [](const PreviewRange& range, uint32_t c) { return range.last < c; });
+    if (it != std::end(preview_ranges) && it->first <= code) {
+        if (it->kind == 1) return "␣"; // Explicit marker for an invisible character.
+        if (it->kind == 2) return utf8(0x25cc) + utf8(code); // Dotted-circle carrier.
+    }
+    return utf8(code);
+}
 inline std::string label(uint32_t c) { char s[16];std::snprintf(s,sizeof(s),"U+%04X",unsigned(c));return s; }
 inline std::vector<Match> search(std::string query) {
     if(!query.empty() && query.front()=='+') query.erase(0,1);
     auto first=query.find_first_not_of(" \t\r\n"),last=query.find_last_not_of(" \t\r\n");
     query=first==std::string::npos?"":query.substr(first,last-first+1);
     for(char& c:query) if(c>='a'&&c<='z')c-=32;
-    if(query.starts_with("U+") || query.starts_with("0X"))query.erase(0,2);
+    const bool explicit_code = query.starts_with("U+") || query.starts_with("0X");
+    if(explicit_code)query.erase(0,2);
     if(query.empty()) return {};
     bool hex=query.size()<=6;uint32_t code=0;
     for(char c:query) {int n=c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:-1;if(n<0){hex=false;break;}code=(code<<4)|n;}
@@ -38,9 +50,10 @@ inline std::vector<Match> search(std::string query) {
         if(!scalar(code)||code==0) return result;
         auto it=std::lower_bound(std::begin(names),std::end(names),code,[](const Name& n,uint32_t c){return n.code<c;});
         std::string name=it!=std::end(names)&&it->code==code?name_text(*it):"UNNAMED CODE POINT";
-        result.push_back({code,name,utf8(code)});return result;
+        result.push_back({code,name,utf8(code)});
+        if(explicit_code) return result;
     }
-    for(const auto& n:names) if(std::string_view(name_text(n)).find(query)!=std::string_view::npos)
+    for(const auto& n:names) if((!hex || n.code != code) && std::string_view(name_text(n)).find(query)!=std::string_view::npos)
         result.push_back({n.code,name_text(n),utf8(n.code)});
     return result;
 }

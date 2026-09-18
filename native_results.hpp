@@ -5,7 +5,7 @@
 #include <optional>
 namespace kalwer::native {
 enum class Action { Copy, Ssh, Info };
-struct Result {std::string title, subtitle, payload;Action action=Action::Copy;};
+struct Result {std::string title, subtitle, payload;Action action=Action::Copy;std::string preview{};};
 inline bool command(const std::string& input,const std::string& cmd) {
     return input==cmd || (input.starts_with(cmd)&&input.size()>cmd.size()&&(input[cmd.size()]==' '||input[cmd.size()]=='\t'));
 }
@@ -15,7 +15,7 @@ inline std::string tail(const std::string& input,size_t n) {
 inline std::optional<std::vector<Result>> search(const std::string& input,const std::filesystem::path& home) {
     std::vector<Result> rows;
     if(input.starts_with("+")) {
-        for(const auto& m:unicode::search(input))rows.push_back({unicode::label(m.code)+" · "+m.name,"Enter to copy character",m.text});
+        for(const auto& m:unicode::search(input))rows.push_back({unicode::label(m.code)+" · "+m.name,"Enter to copy character",m.text,Action::Copy,unicode::preview(m.code)});
         if(rows.empty())rows.push_back({"Unicode lookup","Type +200b or +zero; Enter copies the selected character",{},Action::Info});
     } else if(command(input,"/wemote")) {
         for(const auto& e:emoticons::search(tail(input,7)))rows.push_back({e.face,std::string(e.name)+" · "+e.category+" · Enter to copy",e.face});

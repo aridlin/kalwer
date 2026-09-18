@@ -14,7 +14,7 @@ BINDIR ?= $(PREFIX)/bin
 
 all: elephant-field
 
-elephant-field: native_results.hpp unicode_search.hpp ssh_hosts.hpp emoticons.hpp vendor/unicode/names.inc main.cpp fred_gtk.hpp fred/api.h multiline_gtk.hpp popup_placement.hpp build-koom/bundle.o appearance.hpp live_backdrop.hpp backdrop_linux.hpp protocols/toplevel-protocol.o peggle.hpp garden.hpp chess.hpp shop.hpp tetris.hpp breakout.hpp kar.hpp kar_art.hpp game_assets.hpp kar_pixels.hpp kar_physics.hpp kar_course.hpp game_trials.hpp koom.hpp calculator_format.hpp passive_koins.hpp games.hpp games_gtk.hpp gpu_game.hpp gpu_dither.hpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp release_selection.hpp
+elephant-field: native_results.hpp unicode_search.hpp ssh_hosts.hpp emoticons.hpp vendor/unicode/names.inc vendor/unicode/preview.inc main.cpp fred_gtk.hpp fred/api.h multiline_gtk.hpp popup_placement.hpp build-koom/bundle.o appearance.hpp live_backdrop.hpp backdrop_linux.hpp protocols/toplevel-protocol.o peggle.hpp garden.hpp chess.hpp shop.hpp tetris.hpp breakout.hpp kar.hpp kar_art.hpp game_assets.hpp kar_pixels.hpp kar_physics.hpp kar_course.hpp game_trials.hpp koom.hpp calculator_format.hpp passive_koins.hpp games.hpp games_gtk.hpp gpu_game.hpp gpu_dither.hpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp release_selection.hpp
 	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags $(PKGS)) main.cpp protocols/toplevel-protocol.o build-koom/bundle.o -Wl,-z,noexecstack -o $@ $(shell pkg-config --libs $(PKGS)) -lm -ldl
 
 install: elephant-field

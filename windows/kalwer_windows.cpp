@@ -86,7 +86,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.11.0";
+constexpr wchar_t kKalwerVersion[] = L"0.11.1";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -501,6 +501,7 @@ struct AppEntry {
     std::wstring folded;
     std::vector<int> matches;
     std::wstring payload;
+    std::wstring character_preview;
     std::wstring app_user_model_id;
     int score = 0;
     bool pinned = false;
@@ -559,6 +560,7 @@ struct RenderDevice {
     ComPtr<ID2D1SolidColorBrush> brush;
     ComPtr<IDWriteFactory> write_factory;
     ComPtr<IDWriteTextFormat> title_format;
+    ComPtr<IDWriteTextFormat> character_format;
     ComPtr<IDWriteTextFormat> subtitle_format;
     ComPtr<IDWriteTextFormat> input_format;
     ComPtr<IDWriteTextFormat> tiny_format;
@@ -1271,7 +1273,7 @@ void update_results() {
     const auto home=std::filesystem::path(_wgetenv(L"USERPROFILE")?_wgetenv(L"USERPROFILE"):L".");
     if (auto rows=kalwer::native::search(utf8(raw_query),home)) {
         for(const auto& row:*rows) {
-            AppEntry r;r.title=wide(row.title);r.subtitle=wide(row.subtitle);r.payload=wide(row.payload);
+            AppEntry r;r.title=wide(row.title);r.subtitle=wide(row.subtitle);r.payload=wide(row.payload);r.character_preview=wide(row.preview);
             r.link=row.action==kalwer::native::Action::Copy?L"::copy":row.action==kalwer::native::Action::Ssh?L"::ssh":L"::info";
             filtered.push_back(std::move(r));
         }
@@ -2132,6 +2134,13 @@ HRESULT create_device_independent_resources() {
                               IID_PPV_ARGS(render.wic_factory.GetAddressOf()));
     if (FAILED(result)) return result;
 
+    result = render.write_factory->CreateTextFormat(
+        L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 28.0f, L"en-US", render.character_format.GetAddressOf());
+    if (FAILED(result)) return result;
+    render.character_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    render.character_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    render.character_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     const wchar_t* family = L"JetBrainsMono Nerd Font";
     result = render.write_factory->CreateTextFormat(
         family, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
@@ -2420,6 +2429,14 @@ ComPtr<ID2D1Bitmap1> icon_for(const AppEntry& entry) {
 }
 
 void draw_special_icon(const AppEntry& result, float x, float y) {
+    if (!result.character_preview.empty()) {
+        set_brush(color(0.70f, 0.94f, 0.78f, 1.0f));
+        state.render.d2d_context->DrawTextW(result.character_preview.c_str(),
+            static_cast<UINT32>(result.character_preview.size()), state.render.character_format.Get(),
+            D2D1::RectF(x, y, x + 38, y + 38), state.render.brush.Get(),
+            D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+        return;
+    }
     auto& context = state.render.d2d_context;
     const D2D1_COLOR_F bright = color(0.62f, 0.91f, 0.70f, 0.96f);
     const D2D1_COLOR_F dim = color(0.30f, 0.68f, 0.47f, 0.88f);
