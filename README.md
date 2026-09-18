@@ -214,14 +214,16 @@ using the same animated frame and copy/close interactions as terminal output.
 Text popups do not create a shell or background job, do not auto-close, and
 support selection, copying and scrolling. Terminal-specific buttons appear only
 for terminal sessions. The shared `launcher_commands.hpp` catalog generates help.
-Linux positions output popups at the upper-right of the launcher’s monitor,
-with a 10-pixel right margin and 96-pixel top offset. X11/XWayland placement
-is built in; native Wayland uses gtk-layer-shell when available at build time
-and supported by the compositor. Other native Wayland compositors retain
-their normal placement policy. No KWin window rule is needed.
+Linux terminal and text popups eject from the right edge of the search bar,
+unfold beside the launcher, and stay there. Game popups use the same line and
+unfold animation, then ease into the monitor’s upper-right corner over 420 ms.
+Placement is clamped to the monitor work area. X11/XWayland follows the actual
+launcher position; native Wayland uses gtk-layer-shell when available and the
+launcher’s requested centered position, since Wayland does not expose absolute
+coordinates for regular windows. No KWin placement rule is needed.
 
-Linux retains the `Kalwer Command Output` window title for compatibility with
-existing Hyprland right-side placement rules; the visible header uses the document title.
+The `Kalwer Command Output` title is retained. Remove old compositor rules that
+force its position; those rules can override Kalwer’s own animation.
 
 Android caches installed-app components and labels on disk as well as in memory.
 Cold launches display the saved catalog before PackageManager discovery completes;

@@ -1682,7 +1682,11 @@ gboolean output_animation_tick(GtkWidget*, GdkFrameClock*, gpointer) {
         gtk_widget_set_size_request(state.output_content, -1, content_height);
         gtk_widget_set_opacity(state.output_content, unfold > 0.0 ? 1.0 : 0.0);
     }
-    if (elapsed < unfold_start + state.popup_expand_ms + 40.0) {
+    const double expansion_finished = unfold_start + state.popup_expand_ms + 40.0;
+    kalwer::animate_popup_position(GTK_WINDOW(state.output_window),
+        kalwer::popup_corner_progress(elapsed, expansion_finished, state.output_game != nullptr));
+    const double animation_finished = expansion_finished + (state.output_game ? 420.0 : 0.0);
+    if (elapsed < animation_finished) {
         return G_SOURCE_CONTINUE;
     }
 
@@ -1858,7 +1862,9 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_window_set_default_size(GTK_WINDOW(state.output_window), kOutputWidth, kOutputHeight);
     gtk_window_set_resizable(GTK_WINDOW(state.output_window), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(state.output_window), FALSE);
-    kalwer::place_output_popup(GTK_WINDOW(state.output_window), GTK_WINDOW(state.window));
+    kalwer::place_output_popup(GTK_WINDOW(state.output_window), GTK_WINDOW(state.window),
+        static_cast<int>(kSearchX + kSearchWidth),
+        static_cast<int>(kSearchY + search_height() / 2.0 - 18.0));
     gtk_window_set_keep_above(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(state.output_window), TRUE);
