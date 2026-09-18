@@ -2,6 +2,11 @@ CXX ?= g++
 CXXFLAGS ?= -O2 -pipe
 CXXFLAGS += -pthread -std=c++20 -Wall -Wextra -Wpedantic
 PKGS = wayland-client gtk+-3.0 json-glib-1.0 pangocairo epoxy vte-2.91
+# Optional: native Wayland popup placement. X11/XWayland needs no extra library.
+ifneq ($(shell pkg-config --exists gtk-layer-shell-0 && echo yes),)
+PKGS += gtk-layer-shell-0
+CXXFLAGS += -DKALWER_HAVE_LAYER_SHELL
+endif
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 
@@ -9,7 +14,7 @@ BINDIR ?= $(PREFIX)/bin
 
 all: elephant-field
 
-elephant-field: main.cpp multiline_gtk.hpp build-koom/bundle.o appearance.hpp live_backdrop.hpp backdrop_linux.hpp protocols/toplevel-protocol.o peggle.hpp garden.hpp chess.hpp shop.hpp tetris.hpp breakout.hpp kar.hpp kar_art.hpp game_assets.hpp kar_pixels.hpp kar_physics.hpp kar_course.hpp game_trials.hpp koom.hpp calculator_format.hpp passive_koins.hpp games.hpp games_gtk.hpp gpu_game.hpp gpu_dither.hpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp release_selection.hpp
+elephant-field: main.cpp multiline_gtk.hpp popup_placement.hpp build-koom/bundle.o appearance.hpp live_backdrop.hpp backdrop_linux.hpp protocols/toplevel-protocol.o peggle.hpp garden.hpp chess.hpp shop.hpp tetris.hpp breakout.hpp kar.hpp kar_art.hpp game_assets.hpp kar_pixels.hpp kar_physics.hpp kar_course.hpp game_trials.hpp koom.hpp calculator_format.hpp passive_koins.hpp games.hpp games_gtk.hpp gpu_game.hpp gpu_dither.hpp elevation_linux.hpp system_file_index.hpp launcher_commands.hpp update_status.hpp release_selection.hpp
 	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags $(PKGS)) $< protocols/toplevel-protocol.o build-koom/bundle.o -Wl,-z,noexecstack -o $@ $(shell pkg-config --libs $(PKGS)) -lm
 
 install: elephant-field

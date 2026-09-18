@@ -1,5 +1,6 @@
 #include "release_selection.hpp"
 #include "multiline_gtk.hpp"
+#include "popup_placement.hpp"
 #include "passive_koins.hpp"
 #include "calculator_format.hpp"
 #include "system_file_index.hpp"
@@ -1852,11 +1853,12 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     state.output_opened_us = g_get_monotonic_time();
 
     state.output_window = gtk_application_window_new(state.app);
-    // Keep the existing compositor identifier: its rule anchors this animated panel on the right.
+    // Retain the title for existing rules; placement is handled by the app.
     gtk_window_set_title(GTK_WINDOW(state.output_window), "Kalwer Command Output");
     gtk_window_set_default_size(GTK_WINDOW(state.output_window), kOutputWidth, kOutputHeight);
     gtk_window_set_resizable(GTK_WINDOW(state.output_window), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(state.output_window), FALSE);
+    kalwer::place_output_popup(GTK_WINDOW(state.output_window), GTK_WINDOW(state.window));
     gtk_window_set_keep_above(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(state.output_window), TRUE);

@@ -89,7 +89,9 @@ normal optimized, unstripped executable and uses the GTK3/VTE runtime libraries
 listed below.
 
 On Arch Linux, install `kalwer` from the AUR. For a source build, install a C++20
-compiler plus GTK3, JSON-GLib, libepoxy, VTE3, pkgconf, and make, then run:
+compiler plus GTK3, JSON-GLib, libepoxy, VTE3, pkgconf, and make. Install
+`gtk-layer-shell` (development package on distributions that split headers)
+before building to enable native Wayland popup placement. Then run:
 
 ```sh
 make
@@ -212,6 +214,12 @@ using the same animated frame and copy/close interactions as terminal output.
 Text popups do not create a shell or background job, do not auto-close, and
 support selection, copying and scrolling. Terminal-specific buttons appear only
 for terminal sessions. The shared `launcher_commands.hpp` catalog generates help.
+Linux positions output popups at the upper-right of the launcher’s monitor,
+with a 10-pixel right margin and 96-pixel top offset. X11/XWayland placement
+is built in; native Wayland uses gtk-layer-shell when available at build time
+and supported by the compositor. Other native Wayland compositors retain
+their normal placement policy. No KWin window rule is needed.
+
 Linux retains the `Kalwer Command Output` window title for compatibility with
 existing Hyprland right-side placement rules; the visible header uses the document title.
 
