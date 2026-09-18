@@ -14,6 +14,9 @@ inline constexpr std::array commands = {
     Command{"/tetris", "Falling blocks, line clears and ghost piece", ""},
     Command{"/breakout", "Paddle, ball and three brick boards", ""},
     Command{"/kar", "Native arcade phone racing", ""},
+#ifdef __linux__
+    Command{"/fred", "Fred: native Spectrum port in a larger popup", ""},
+#endif
     Command{"/koom", "Doom-compatible Freedoom player", ""},
     Command{"/snake", "Play native Snake (pauses when unfocused)", ""},
     Command{"/minesweeper", "Play native Minesweeper", ""},

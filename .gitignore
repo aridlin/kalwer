@@ -6,6 +6,7 @@
 /protocols/*.o
 
 /build-koom/
+/build-fred/
 /build-koom-windows/
 
 __pycache__/

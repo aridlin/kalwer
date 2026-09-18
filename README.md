@@ -501,3 +501,7 @@ continues to install user-provided Doom-compatible data.
 
 Koom uses absolute frame deadlines and a small playback buffer, so rendering
 and pipe-transfer time no longer introduces regular audio gaps.
+
+### Fred native popup on Linux
+
+`/fred` opens the native Fred port in a larger popup. See [Fred setup](fred/README.md) for the local build using your own original game reference. Original assets are never included in Kalwer releases.
