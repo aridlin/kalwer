@@ -27,6 +27,7 @@ inline constexpr std::array commands = {
     Command{"/chess", "Chess versus the computer or a friend", ""},
     Command{"/shop", "Spend koins on minigame unlocks", ""},
     Command{"/koins", "Your permanent koins and wins", ""},
+    Command{"/malcip", "Toggle the MALCIP cinematic desktop overlay", ""},
     Command{"/config", "Appearance and configuration", ""},
     Command{"/config-save", "Save appearance preset", ""},
     Command{"/config-load", "Restore appearance preset", ""},

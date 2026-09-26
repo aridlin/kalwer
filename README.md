@@ -75,6 +75,7 @@ application ID toggles the window without constructing a new GTK process.
 - Command popups can copy output, continue the same tmux session in Ghostty, or
   detach into the background. The matching shortcuts are Ctrl+Shift+C/G/B.
 - `<` lists running background commands; selecting one reattaches its live popup.
+- `/malcip` hides Kalwer and toggles the installed MALCIP cinematic overlay.
 - Background completion sends a success or failure desktop notification based
   on the process exit code.
 - `? search` opens Google in Firefox after switching to the most recently used

@@ -2709,6 +2709,31 @@ void activate_selection(bool elevated = false) {
         }
         else if (name == "/unlockall") {open_popup({"GAMES",kalwer::wallet.unlock_games()?"All games are unlocked.":"Could not save unlocks. Nothing changed."});}
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
+        else if (name == "/malcip") {
+#ifdef G_OS_WIN32
+            open_popup({"MALCIP", "MALCIP is currently available on Linux desktops."});
+#else
+            gchar* launcher = g_build_filename(g_get_user_data_dir(), "malcip", "run.sh", nullptr);
+            if (!g_file_test(launcher, G_FILE_TEST_IS_EXECUTABLE)) {
+                open_popup({"MALCIP", "MALCIP is not installed. Install it first, then run /malcip again."});
+            } else {
+                gchar* argv[] = {launcher, const_cast<gchar*>("toggle"), nullptr};
+                GError* error = nullptr;
+                const gboolean spawned = g_spawn_async(
+                    g_get_home_dir(), argv, nullptr,
+                    static_cast<GSpawnFlags>(G_SPAWN_STDOUT_TO_DEV_NULL |
+                                             G_SPAWN_STDERR_TO_DEV_NULL),
+                    nullptr, nullptr, nullptr, &error);
+                if (spawned) {
+                    hide_kalwer();
+                } else {
+                    open_popup({"MALCIP", error ? error->message : "Could not start MALCIP."});
+                }
+                if (error) g_error_free(error);
+            }
+            g_free(launcher);
+#endif
+        }
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") { bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored. Reopen Kalwer to see it.":"No readable preset found."}); }
         else if (name == "/config") show_settings_window();
