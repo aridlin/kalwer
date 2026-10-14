@@ -42,7 +42,7 @@ application ID toggles the window without constructing a new GTK process.
 - Up/Down or Ctrl+P/Ctrl+N moves the selection.
 - Left/Right, Home/End, Shift-selection, and Ctrl+A/C/X/V edit the search text.
 - Enter launches the selected result.
-- Ctrl+Shift+Enter toggles a favourite and moves it into the pinned group.
+- Alt+Enter toggles a favourite and moves it into the pinned group.
 - Shift+Enter inserts a newline in the launcher input. The search box grows up
   to eight lines, then scrolls; selection, clipboard, undo and arrow-key editing
   use native controls. Enter submits, and Ctrl+Up/Down selects results while
@@ -81,7 +81,8 @@ application ID toggles the window without constructing a new GTK process.
 - `? search` opens Google in Firefox after switching to the most recently used
   Firefox workspace.
 - Arithmetic is evaluated locally with normal precedence, parentheses, powers,
-  percent-of, `sqrt(...)`, and `√`. Decimal is the first result, followed by
+  percent-of, `sqrt(...)`, and `√`. Both `.` and `,` work as decimal separators, including standalone inputs
+  such as `1.5` and `1,5` (both offer `3/2`). Decimal is the first result, followed by
   reduced fraction, mixed-number, and percentage forms when applicable.
 - Reopening Kalwer within three seconds restores the exact query, result
   selection, and scroll position.
@@ -159,7 +160,7 @@ cmake --build build-windows
 Run `kalwer.exe` once to keep it resident. `Alt+Space` toggles it; a
 second invocation also toggles the existing instance. This early port already
 supports Start Menu application discovery, fuzzy search, native edit/selection
-keys and clipboard shortcuts, scrolling, persistent Shift+Enter favourites,
+keys and clipboard shortcuts, scrolling, persistent Alt+Enter favourites,
 multi-form calculator queries, and `?` Google queries. `>` runs commands
 directly in an embedded interactive ConPTY session: output streams into the
 animated side panel, keyboard input is forwarded to the process, output can be

@@ -90,7 +90,7 @@ public final class SearchLogic {
     /** Returns null for ordinary text, incomplete expressions, or non-finite results. */
     public static String calculate(String input) {
         String s = input.trim().toLowerCase(Locale.ROOT).replace('×', '*').replace('÷', '/')
-                .replace('−', '-').replace("√", "sqrt");
+                .replace('−', '-').replace("√", "sqrt").replace(',', '.');
         if (s.startsWith("=")) s = s.substring(1).trim();
         if (s.isEmpty() || s.length() > 256 || !EXPRESSION.matcher(s).matches()) return null;
         try {

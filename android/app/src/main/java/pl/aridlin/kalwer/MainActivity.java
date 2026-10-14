@@ -299,7 +299,7 @@ public final class MainActivity extends Activity {
             if (action == EditorInfo.IME_ACTION_GO || action == EditorInfo.IME_ACTION_SEARCH
                     || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
                 if (event == null || event.getAction() == KeyEvent.ACTION_DOWN) {
-                    if (event != null && event.isShiftPressed()) toggleFavourite(selected); else submit();
+                    if (event != null && event.isAltPressed()) toggleFavourite(selected); else submit();
                 }
                 return true;
             }

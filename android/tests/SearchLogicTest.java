@@ -29,9 +29,14 @@ public final class SearchLogicTest {
         equal("7", SearchLogic.calculate("√49"));
         equal("10", SearchLogic.calculate("200*5%"));
         equal("0.3", SearchLogic.calculate("0.1+0.2"));
+        equal("1.5", SearchLogic.calculate("1.5"));
+        equal("1.5", SearchLogic.calculate("1,5"));
+        equal("0.75", SearchLogic.calculate("0,5 + .25"));
+        equal("0.3", SearchLogic.calculate("0,1+0.2"));
+        equal("-1.5", SearchLogic.calculate("-1,5"));
         equal("0", SearchLogic.calculate("-0"));
         equal("6", SearchLogic.calculate("= 2 × 3"));
-        for (String s : new String[]{"", "? cats", "firefox", "1/0", "sqrt(-1)", "2+", "(2+3", "2..3", "2^9999", "1 2"}) equal(null, SearchLogic.calculate(s));
+        for (String s : new String[]{"", "? cats", "firefox", "1/0", "sqrt(-1)", "2+", "(2+3", "2..3", "1,2.3", "1,,5", "1 2,5", "2^9999", "1 2"}) equal(null, SearchLogic.calculate(s));
         equal(300, SearchLogic.timerSeconds("5"));
         equal(300, SearchLogic.timerSeconds("5m"));
         equal(5430, SearchLogic.timerSeconds("1h 30m 30s"));

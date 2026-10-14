@@ -64,7 +64,7 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.11.1";
+constexpr const char* kKalwerVersion = "0.11.2";
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -2191,7 +2191,10 @@ void open_google_in_firefox(const std::string& raw_query) {
 
 class ExpressionParser {
 public:
-    explicit ExpressionParser(const std::string& source) : source_(source) {}
+    explicit ExpressionParser(const std::string& source) : source_(source) {
+        // Both decimal conventions share the same grammar; repeated separators remain invalid.
+        std::replace(source_.begin(), source_.end(), ',', '.');
+    }
 
     bool parse(double& value) {
         position_ = 0;
@@ -2199,7 +2202,8 @@ public:
         saw_binary_operator_ = false;
         value = expression();
         whitespace();
-        return valid_ && position_ == source_.size() && saw_binary_operator_ &&
+        return valid_ && position_ == source_.size() &&
+               (saw_binary_operator_ || source_.find('.') != std::string::npos) &&
                std::isfinite(value);
     }
 
@@ -2307,7 +2311,7 @@ private:
         }
         char* end = nullptr;
         const char* start = source_.c_str() + position_;
-        const double value = std::strtod(start, &end);
+        const double value = g_ascii_strtod(start, &end);
         if (!end || end == start) {
             valid_ = false;
             return 0.0;
@@ -2316,7 +2320,7 @@ private:
         return value;
     }
 
-    const std::string& source_;
+    std::string source_;
     std::size_t position_ = 0;
     bool valid_ = true;
     bool saw_binary_operator_ = false;
@@ -3211,7 +3215,7 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
         }
         case GDK_KEY_Return:
         case GDK_KEY_KP_Enter:
-            if ((event->state & (GDK_SHIFT_MASK|GDK_CONTROL_MASK))==(GDK_SHIFT_MASK|GDK_CONTROL_MASK)) toggle_favorite();
+            if (event->state & GDK_MOD1_MASK) toggle_favorite();
             else if (event->state & GDK_SHIFT_MASK) open_multiline_editor();
             else activate_selection((event->state & GDK_CONTROL_MASK) != 0);
             return TRUE;

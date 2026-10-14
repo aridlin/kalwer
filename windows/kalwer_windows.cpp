@@ -86,7 +86,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.11.1";
+constexpr wchar_t kKalwerVersion[] = L"0.11.2";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -966,7 +966,10 @@ bool set_autostart(bool enabled) {
 
 class ExpressionParser {
 public:
-    explicit ExpressionParser(const std::wstring& source) : source_(source) {}
+    explicit ExpressionParser(const std::wstring& source) : source_(source) {
+        // Both decimal conventions share the same grammar; repeated separators remain invalid.
+        std::replace(source_.begin(), source_.end(), L',', L'.');
+    }
 
     bool parse(double& value) {
         position_ = 0;
@@ -974,7 +977,7 @@ public:
         saw_operator_ = false;
         value = expression();
         whitespace();
-        return valid_ && position_ == source_.size() && saw_operator_ && std::isfinite(value);
+        return valid_ && position_ == source_.size() && (saw_operator_ || source_.find(L'.') != std::wstring::npos) && std::isfinite(value);
     }
 
 private:
@@ -1048,13 +1051,16 @@ private:
         whitespace();
         const wchar_t* start = source_.c_str() + position_;
         wchar_t* end = nullptr;
-        const double value = std::wcstod(start, &end);
+        // Keep decimal input independent of the user's numeric locale.
+        const auto locale = _create_locale(LC_NUMERIC, "C");
+        const double value = _wcstod_l(start, &end, locale);
+        _free_locale(locale);
         if (!end || end == start) { valid_ = false; return 0.0; }
         position_ += static_cast<size_t>(end - start);
         return value;
     }
 
-    const std::wstring& source_;
+    std::wstring source_;
     size_t position_ = 0;
     bool valid_ = true;
     bool saw_operator_ = false;
@@ -3346,6 +3352,11 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
         }
         return CallWindowProcW(state.edit_proc, window, message, wparam, lparam);
     }
+    if (message == WM_SYSKEYDOWN && wparam == VK_RETURN && (lparam & (1LL << 29))) {
+        toggle_favorite();
+        return 0;
+    }
+    if (message == WM_SYSCHAR && wparam == L'\r') return 0;
     if(message==WM_CHAR && (wparam==L'\r' || wparam==L'\n' || wparam==L'\t'))return 0;
     if (message == WM_KEYDOWN) {
         if(wparam=='A' && (GetKeyState(VK_CONTROL)&0x8000)){SendMessageW(window,EM_SETSEL,0,-1);state.render_dirty=true;return 0;}
@@ -3359,7 +3370,7 @@ LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             case VK_NEXT: move_selection(kSelectableResults); return 0;
             case VK_ESCAPE: hide_launcher(); return 0;
             case VK_RETURN:
-                if ((GetKeyState(VK_SHIFT)&0x8000) && (GetKeyState(VK_CONTROL)&0x8000))toggle_favorite();
+                if (GetKeyState(VK_MENU)&0x8000)toggle_favorite();
                 else if(GetKeyState(VK_SHIFT)&0x8000)open_multiline_editor();
                 else activate_selection((GetKeyState(VK_CONTROL) & 0x8000) != 0);
                 return 0;

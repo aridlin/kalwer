@@ -71,7 +71,7 @@ Back or the top-right × closes it. System bars can be revealed with an edge swi
   Exact and prefix matches rank before partial/fuzzy matches; pinned matches lead
   the app group. Apps in a separate work profile are not included in this preview.
 - Tap a result or press the keyboard's Go/Enter button to open it. Hardware
-  Up/Down selects results; Shift+Enter, a long press, or the star toggles a favourite.
+  Up/Down selects results; Alt+Enter, a long press, or the star toggles a favourite.
 - If there are no app or calculator results, **Search Google** becomes the result.
   Enter opens the complete query in the default browser. Query parameters are
   encoded, including spaces, `&`, `+` and Unicode. No search is sent while typing.
