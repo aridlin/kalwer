@@ -8,12 +8,14 @@
 #include "launcher_commands.hpp"
 #include "update_status.hpp"
 #include "games_gtk.hpp"
+#include "categories_gtk.hpp"
 #include "fred_gtk.hpp"
 #include <optional>
 #include <gtk/gtk.h>
 #include "elevation_linux.hpp"
 #include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
+#include "notes_client.hpp"
 #include <pango/pangocairo.h>
 #include <epoxy/gl.h>
 #include <vte/vte.h>
@@ -64,7 +66,11 @@ constexpr int kSelectableResults = 5;
 constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
-constexpr const char* kKalwerVersion = "0.11.2";
+#ifdef KALWER_LOCAL_BUILD
+constexpr const char* kKalwerVersion = "0.12.0+local.1";
+#else
+constexpr const char* kKalwerVersion = "0.12.0";
+#endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
 
@@ -426,6 +432,11 @@ void check_for_update(bool include_prereleases=false) {
 
 std::atomic<bool> manual_update_requested{false};
 void request_update_check(bool include_prereleases=false) {
+#ifdef KALWER_LOCAL_BUILD
+    // Published releases may omit local features. Never replace this build silently.
+    update_status.set("Local build with Notes commands. Automatic replacement is paused to preserve these changes. Install a published release manually when it includes Notes support.");
+    return;
+#endif
     if(include_prereleases)manual_update_requested.store(true);
     if (!update_status.begin_check()) return;
     std::thread([] {
@@ -839,7 +850,7 @@ void draw_search(cairo_t* cr) {
     const std::string help = completing
         ? "TAB " + std::to_string(state.completion_index + 1) + "/" +
               std::to_string(state.completion_candidates.size()) + "   SHIFT+TAB BACK"
-        : "> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
+        : (query.starts_with("&") ? "&manage EDIT   ↑↓ SCROLL   ↵ GO" : "& GROUPS   > PTY   < JOBS   ? WEB   ↵ GO");
     draw_layout(cr, help, completing ? 360 : 350, 60 + input_extra_height,
                 "JetBrainsMono Nerd Font Medium 7.5", 0.46, 0.67, 0.52);
 }
@@ -2490,6 +2501,8 @@ void show_local_results(std::vector<Result> results) {
     if (state.canvas) gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));
 }
 
+#include "notes_gtk.hpp"
+
 gboolean poll_files(gpointer) {
     if (!state.entry || gtk_entry_get_text(GTK_ENTRY(state.entry))[0] != ':') return G_SOURCE_CONTINUE;
     const auto reply = file_index.poll(file_revision);
@@ -2688,6 +2701,20 @@ void launch_app_with_sudo(const Result& result) {
 void activate_selection(bool elevated = false) {
     if (state.selection < 0 || state.selection >= static_cast<int>(state.results.size())) return;
     const Result result = state.results[state.selection];
+    if (result.provider == "kalwer-notes") { notes_activate(result); return; }
+    if (result.provider == "kalwer-category") {
+        gtk_entry_set_text(GTK_ENTRY(state.entry), ("&"+result.identifier).c_str());return;
+    }
+    if (result.provider == "kalwer-category-edit") {
+        kalwer::categories::edit(GTK_WINDOW(state.window),result.identifier);
+        g_signal_emit_by_name(state.entry,"changed");return;
+    }
+    if (result.provider == "kalwer-category-app") {
+        auto* app=g_desktop_app_info_new(result.identifier.c_str());GError* error=nullptr;
+        if(app && g_app_info_launch(G_APP_INFO(app),nullptr,nullptr,&error))hide_kalwer();
+        else open_popup({"APPLICATION",error?error->message:"Application is no longer installed."});
+        g_clear_error(&error);if(app)g_object_unref(app);return;
+    }
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
         if (name == "/fred") {
@@ -2741,7 +2768,7 @@ void activate_selection(bool elevated = false) {
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") { bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored. Reopen Kalwer to see it.":"No readable preset found."}); }
         else if (name == "/config") show_settings_window();
-        else if (name == "/help") open_popup(kalwer::help());
+        else if (name == "/help") { auto help=kalwer::help();help.body+="\nNOTES (Linux)\n";help.body+=kalwer::notes::help;open_popup(help); }
         else if (name == "/updates") { request_update_check(true); open_popup({"KALWER UPDATES", std::string("Running v") + kKalwerVersion + "\n\n" + update_status.get()}); state.output_updates = true; }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nplocate indexes readable local filesystems, including home and mounted local drives. Virtual filesystems and network filesystems are excluded.\n\n/index-setup: install plocate if needed\n/reindex: refresh the incremental index\n\nUpdates run every 15 minutes while Kalwer is running."});
         else if (name == "/index-setup") {
@@ -3203,6 +3230,9 @@ gboolean on_entry_key(GtkWidget*, GdkEventKey* event, gpointer) {
             return TRUE;
         case GDK_KEY_Tab:
         case GDK_KEY_ISO_Left_Tab: {
+            if (state.selection>=0 && state.selection<static_cast<int>(state.results.size()) && state.results[state.selection].provider=="kalwer-category") {
+                activate_selection();gtk_editable_set_position(GTK_EDITABLE(state.entry),-1);return TRUE;
+            }
             const std::string suggestion = suggested_completion();
             if (!suggestion.empty()) {
                 gtk_entry_set_text(GTK_ENTRY(state.entry), suggestion.c_str());
@@ -3251,6 +3281,26 @@ void on_entry_changed(GtkEditable*, gpointer) {
     }
     if (!state.applying_completion) clear_completion();
     const std::string input = gtk_entry_get_text(GTK_ENTRY(state.entry));
+    if (input.starts_with('*')) { notes_results(); return; }
+    if (input.starts_with("&")) {
+        const auto cats=kalwer::categories::load(kalwer::categories::config_path());
+        const auto tail=input.substr(1);const auto space=tail.find_first_of(" \t");
+        const auto name=kalwer::categories::lower(tail.substr(0,space));
+        const auto query=space==std::string::npos?std::string{}:trim_copy(tail.substr(space+1));
+        auto found=std::find_if(cats.begin(),cats.end(),[&](const auto& c){return c.name==name;});
+        std::vector<Result> rows;
+        auto add=[&](std::string id,std::string title,std::string sub,std::string provider,std::string icon){Result r;r.identifier=std::move(id);r.text=std::move(title);r.subtext=std::move(sub);r.provider=std::move(provider);r.icon=std::move(icon);rows.push_back(std::move(r));};
+        if(found!=cats.end()) {
+            for(const auto& a:kalwer::categories::members(*found,kalwer::categories::installed_apps(),query))
+                add(a.id,a.name,"&"+name,a.id.starts_with("/")?"kalwer-slash":"kalwer-category-app",a.icon);
+            if(rows.empty())add({},"No matching applications","Use Edit category to choose apps or change automatic grouping.","kalwer-info","applications-other");
+            add(name,"Edit &"+name,"Automatic grouping, manual selection and ordering","kalwer-category-edit","preferences-system");
+        } else {
+            for(const auto& c:cats)if(c.name.starts_with(name))add(c.name,"&"+c.name,c.automatic?"Automatic category":"Manual category","kalwer-category","folder");
+            add({},"Manage categories","Create a category, choose apps, or arrange their order","kalwer-category-edit","preferences-system");
+        }
+        show_local_results(std::move(rows));return;
+    }
     if (auto rows = kalwer::native::search(input, g_get_home_dir())) {
         std::vector<Result> results;
         for (const auto& row : *rows) {
@@ -3422,7 +3472,8 @@ void show_popup() {
     g_timeout_add(35, focus_kalwer, nullptr);
     g_timeout_add(180, focus_kalwer, nullptr);
     ensure_animation();
-    if (!restore_recent || state.query_pending) schedule_query(8);
+    if (std::string(gtk_entry_get_text(GTK_ENTRY(state.entry))).starts_with('*')) notes_results();
+    else if (!restore_recent || state.query_pending) schedule_query(8);
 }
 
 void activate(GtkApplication* app, gpointer) {
@@ -3448,7 +3499,7 @@ void activate(GtkApplication* app, gpointer) {
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
-        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() ||
+        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() || notes_busy || notes_login_window ||
             (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
         for (const auto& job : state.jobs) {
             int status = 0;

@@ -524,3 +524,64 @@ and pipe-transfer time no longer introduces regular audio gaps.
 ### Fred native popup on Linux
 
 `/fred` opens the native Fred port in a larger popup. See [Fred setup](fred/README.md) for the local build using your own original game reference. Original assets are never included in Kalwer releases.
+
+
+## Notes commands (Linux)
+
+Notes sync directly with https://notes.aridlin.pl using its existing account API.
+Type `*` to discover the commands. `*read` lists notes; `*read words` searches
+both titles and contents. Up/Down selects a note and Enter opens its full text.
+
+- `*note text` (or `*text`): save a Markdown note.
+- `*someday text`, `*soon text`, `*reference text`, `*disposable text`: save with that lifecycle.
+- `*task text`: save a checklist task; `*idea text`: save a project idea.
+- Those capture commands without text browse the corresponding notes.
+- `*sync`: fetch fresh notes. Lists refresh when entered after 15 seconds.
+- `*login`, `*logout`: manage Kalwer's notes session; `*web` opens the website.
+- `*help`: command list and help.
+
+The native sign-in dialog uses your Notes username and password. The password
+travels over stdin to curl and is not saved. A remembered server session is stored
+in `$XDG_DATA_HOME/kalwer/notes/cookies` (normally `~/.local/share/kalwer/notes/cookies`)
+with permissions 0600 inside a 0700 directory. `curl` is required. HTTPS certificate
+verification stays enabled and redirects are not followed.
+
+Requests run off the UI thread. Enter saves once; success appears only after the
+server returns the saved note. A failed save preserves the typed text. If delivery
+was not confirmed, check `*read` before retrying to avoid a duplicate. There is no
+offline write queue. Archived and abandoned notes are excluded from the list;
+done notes remain readable. Existing notes are read-only in Kalwer; edit them on
+the website. Windows and Android do not yet implement the `*` notes commands.
+
+For local development installations, build with `make LOCAL_BUILD=1`. This marks
+the Linux build `0.12.0+local.1` and pauses automatic binary replacement so a
+published release cannot silently remove local features. `/updates` explains
+this state. Normal release builds retain automatic updates. After switching
+build flags, remove `elephant-field` before rebuilding.
+
+
+### Linux 0.12.0: application categories
+
+Type `&` to browse groups, then Enter or Tab to open one. Examples:
+`&games`, `&graphics`, `&office`, `&internet`, `&development`,
+`&multimedia`, `&system`, `&utilities`, and `&education`.
+Add text after a space to filter a group, such as `&games pinball`.
+Installed desktop apps (including Wine and Flatpak launchers) and Kalwer's
+built-in games launch directly from these groups.
+
+Type `&manage` and press Enter to open the category editor. Choose a group
+or type a new name, check applications, then drag rows or use Move up/down
+to arrange them. Save applies changes; Cancel discards them. Turn off
+Automatic for a fixed, manually selected list. Turn it on to append apps
+matching the desktop category (for example `Game`, `Graphics` or `Office`)
+after the checked apps, in alphabetical order. Existing selected apps keep
+their saved order. Newly installed matching apps appear automatically.
+Category names use letters, digits, `-` and `_`; names are case insensitive.
+The category picker loads the saved settings whenever you open or filter it.
+
+Configuration is stored atomically in
+`$XDG_CONFIG_HOME/kalwer/categories-v1.ini` (normally
+`~/.config/kalwer/categories-v1.ini`). Applications are referenced by desktop
+file ID; missing applications are skipped. This Linux release also includes
+the previously local `*` notes feature, so standard release updates retain it.
+Windows and Android do not yet implement `&` categories.
