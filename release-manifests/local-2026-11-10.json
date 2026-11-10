@@ -1,0 +1,26 @@
+{
+  "snapshot": "2026-11-10",
+  "project": "kalwer",
+  "status": "prerelease local-work snapshot",
+  "artifacts": [
+    {
+      "path": "build-koom/kalwer-koom",
+      "size": 991408,
+      "sha256": "4b16f12cd47233ffd06cd9238568b3ceb76598c281eb549351dddafb6938db75"
+    },
+    {
+      "path": "elephant-field",
+      "size": 7227680,
+      "sha256": "2e6c33e977c3ec75c40e13c5727c5ac107f5c135561f42127e409e3616558a51"
+    }
+  ],
+  "checks": [
+    {
+      "job": "kalwer",
+      "passed": true,
+      "command": ""
+    }
+  ],
+  "notes": [],
+  "runtime": "Linux x86_64 dynamic system libraries for ELF binaries; .exe cross-compiled Windows x64; APK preview/debug; OXT platform independent. Source/API compatibility and hardware behavior are not implied by compilation."
+}
