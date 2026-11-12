@@ -18,6 +18,7 @@
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/search_widget" />
         </receiver>
+        <provider android:name=".SharedMediaProvider" android:authorities="pl.aridlin.kalwer.media" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".UpdateProvider" android:authorities="pl.aridlin.kalwer.updates" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".BackdropCaptureService" android:exported="false" android:foregroundServiceType="mediaProjection" />
         <activity android:name=".MainActivity" android:exported="true"
@@ -28,6 +29,12 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.ASSIST" />

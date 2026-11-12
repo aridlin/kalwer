@@ -14,7 +14,7 @@ comes from the finished launcher below it.
 ## Features
 
 - Native Unicode lookup (`+200b`, `+zero`), emoticon search (`/wemote`), and SSH host search (`/wssh`).
-- Linux `/file [path]`: opens Downloads in Kalwer’s terminal popup with a thumbnail browser sorted by modification date (newest first; Downloads mixes files and folders), file previews, drag/copy attachments, and saved folder bookmarks. Enter opens a selection; Escape or × returns from preview. Typing searches filenames; Ctrl+F focuses search and Ctrl+L edits the path. Tiles are built incrementally and visible thumbnails load with at most two concurrent jobs. Images and cached desktop thumbnails are shown; text previews show the first 64 KiB.
+- Linux `/file [path]`: opens Downloads in Kalwer’s terminal popup with a thumbnail browser sorted by modification date (newest first; Downloads mixes files and folders), file previews, drag/copy attachments, and saved folder bookmarks. Enter opens a selection; Ctrl+C copies a selected file without opening it; Escape or × returns from preview. Typing searches filenames; Ctrl+F focuses search and Ctrl+L edits the path. Popup backgrounds use the configured opacity and cached halftone/dither transparency masks, keeping labels and thumbnails sharp. Tiles are built incrementally and visible thumbnails load with at most two concurrent jobs. Images and cached desktop thumbnails are shown; text previews show the first 64 KiB.
 - System-wide `:` file search through Everything on Windows and plocate on Linux.
 - GPU-backed, animated halftone coverage over the fully rendered interface.
 - Scrollable Elephant application search with persistent, unlimited favourites
@@ -109,7 +109,7 @@ normal optimized, unstripped executable and uses the GTK3/VTE runtime libraries
 listed below.
 
 On Arch Linux, install `kalwer` from the AUR. For a source build, install a C++20
-compiler plus GTK3, JSON-GLib, libepoxy, VTE3, pkgconf, and make. Install
+compiler plus GTK3, JSON-GLib, libepoxy, VTE3, libcurl, GStreamer (app/video development libraries), pkgconf, and make. Install
 `gtk-layer-shell` (development package on distributions that split headers)
 before building to enable native Wayland popup placement. Then run:
 
@@ -586,3 +586,12 @@ Configuration is stored atomically in
 file ID; missing applications are skipped. This Linux release also includes
 the previously local `*` notes feature, so standard release updates retain it.
 Windows and Android do not yet implement `&` categories.
+
+`/memes` browses and searches memes.aridlin.pl with category filters, cached previews,
+copy and file dragging. Upload uses a private key saved in Kalwer settings; browser
+2FA remains unchanged. `/binup` browses the current paste and uploads files or text,
+appending to an existing paste and copying the resulting link. Video previews use
+installed GStreamer codecs (`gst-plugins-good` and `gst-libav` on Arch). Android supports both commands and accepts files or
+text through the system Share menu, with a Binup/Memes destination and upload review.
+Import the private Memes key once through **Key → Import file** on Android; it is
+stored using Android Keystore and is never included in the APK.

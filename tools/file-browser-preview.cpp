@@ -11,7 +11,9 @@ int main(int argc, char **argv) {
       app, "activate", G_CALLBACK(+[](GtkApplication *app, gpointer) {
         activate(app, nullptr);
         auto path = g_getenv("KALWER_REVIEW_PATH");
+        auto command = g_getenv("KALWER_REVIEW_COMMAND");
         gtk_entry_set_text(GTK_ENTRY(state.entry),
+                           command ? command :
                            path ? (std::string("/file ") + path).c_str()
                                 : "/file");
         activate_selection();
@@ -43,13 +45,39 @@ int main(int argc, char **argv) {
                   std::lock_guard lock(kalwer::live_backdrop.mutex);
                   g_assert(!kalwer::live_backdrop.active);
                 }
+                auto surface =
+                    cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+                auto cr = cairo_create(surface);
+                cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+                cairo_set_source_rgba(cr, 0, 0, 0, 0);
+                cairo_paint(cr);
+                cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+                gtk_widget_draw(state.output_window, cr);
+                cairo_destroy(cr);
+                cairo_surface_flush(surface);
+                auto pixels = reinterpret_cast<const unsigned *>(
+                    cairo_image_surface_get_data(surface));
+                int stride = cairo_image_surface_get_stride(surface) / 4;
+                unsigned transparent = 0, total = 0;
+                for (int yy = h - 90; yy < h - 40; ++yy)
+                  for (int xx = 30; xx < w - 20; ++xx) {
+                    ++total;
+                    if ((pixels[yy * stride + xx] >> 24) < 250)
+                      ++transparent;
+                  }
+                g_assert(transparent > total / 10);
+                std::fprintf(stderr,
+                             "Native transparency: %u/%u sampled background "
+                             "pixels remain translucent\n",
+                             transparent, total);
+                cairo_surface_write_to_png(surface,
+                                           g_getenv("KALWER_REVIEW_CAPTURE"));
+                cairo_surface_destroy(surface);
                 auto pix = gdk_pixbuf_get_from_window(
                     gtk_widget_get_window(state.output_window), 0, 0,
                     gtk_widget_get_allocated_width(state.output_window),
                     gtk_widget_get_allocated_height(state.output_window));
                 if (pix) {
-                  gdk_pixbuf_save(pix, g_getenv("KALWER_REVIEW_CAPTURE"), "png",
-                                  nullptr, nullptr);
                   g_object_unref(pix);
                 }
                 gtk_widget_destroy(state.output_window);

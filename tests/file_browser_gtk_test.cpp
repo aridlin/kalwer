@@ -38,10 +38,12 @@ void open(GtkApplication *app, const std::string &path) {
       }),
       nullptr);
 }
-void key(guint keyval) {
+void key(guint keyval,
+         GdkModifierType modifiers = static_cast<GdkModifierType>(0)) {
   GdkEventKey e{};
   e.type = GDK_KEY_PRESS;
   e.keyval = keyval;
+  e.state = modifiers;
   gboolean handled = FALSE;
   g_signal_emit_by_name(window, "key-press-event", &e, &handled);
   assert(handled);
@@ -109,6 +111,18 @@ int main(int argc, char **argv) {
       picture = c;
   }
   assert(picture);
+  gtk_flow_box_select_child(GTK_FLOW_BOX(grid), picture);
+  gtk_widget_grab_focus(GTK_WIDGET(picture));
+  key(GDK_KEY_c, GDK_CONTROL_MASK);
+  auto selected_data = gtk_clipboard_wait_for_contents(
+      gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),
+      gdk_atom_intern_static_string("text/uri-list"));
+  assert(selected_data);
+  auto selected_uris = gtk_selection_data_get_uris(selected_data);
+  assert(selected_uris &&
+         std::string(selected_uris[0]) == uri(root + "/Picture.png"));
+  g_strfreev(selected_uris);
+  gtk_selection_data_free(selected_data);
   auto tile = gtk_bin_get_child(GTK_BIN(picture));
   auto box = gtk_bin_get_child(GTK_BIN(tile));
   auto kids = gtk_container_get_children(GTK_CONTAINER(box));

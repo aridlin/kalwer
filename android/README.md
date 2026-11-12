@@ -88,9 +88,7 @@ Back or the top-right × closes it. System bars can be revealed with an edge swi
 - The gear or `/settings` controls background opacity (30–95%, initially 72%)
   and query retention (0–30 seconds, initially 3 seconds). Favourites persist.
 
-The app requests only the normal `SET_ALARM` permission and declares visibility
-of launcher activities. It needs no Internet, contacts, calling, accessibility,
-overlay, or all-packages permission. Google/maps/sharing are handed to other apps.
+The app declares launcher activity visibility and uses `SET_ALARM` for clock actions. Network access fetches verified updates and optional game assets; Android confirms APK installation. Optional backdrop snapshots use explicit MediaProjection consent and a temporary foreground service. It requests no contacts, calling, accessibility, overlay, or all-files storage permission. Google/maps/sharing are handed to other apps.
 Android references: [package visibility](https://developer.android.com/training/package-visibility/declaring),
 [immersive windows](https://developer.android.com/develop/ui/views/layout/immersive),
 and [clock intents](https://developer.android.com/reference/android/provider/AlarmClock).
@@ -163,3 +161,37 @@ SHA-256, Kalwer package name and installed signing certificate, and have a newer
 version code. A prompt offers installation through Android’s package installer;
 Android may first ask you to allow installs from Kalwer. `/updates` checks manually
 and also includes prereleases. Checking/downloading never blocks launcher startup.
+
+## Files, copy tools and app groups (0.5.0)
+
+`/file` opens Android's document picker at Downloads on first use. Pick a file
+for an in-app image or text preview, Copy, Open, or Android's Share chooser.
+Text previews read at most 64 KiB. Hold a file in the folder grid for actions;
+a hardware Ctrl+C copies the selected file URI. Image previews can be held and
+dragged into another app in supported multitasking layouts.
+
+Use **Bookmark folder** to grant access to a folder and save its shortcut. The
+last bookmarked folder opens next time; hold its chip to remove the bookmark.
+Folder contents sort newest first. The grid recycles visible rows, limits image
+work to two workers and keeps a bounded thumbnail cache. Folder access uses
+Android's document grants, including provider/cloud folders; no all-files storage
+permission is requested. Popup surfaces follow popup appearance and can reuse
+the existing optional, consented dither snapshot.
+
+`/wemote word` searches the shared desktop emoticon catalog and copies a chosen
+face. `+200b`, `+U+1F600` or `/unicode` looks up a code point or searches common
+Unicode character names. Text indexes load only when first requested.
+
+`/categories` creates manual app groups. Use `&work` or `&work query` to browse
+or filter a saved group; `&favourites` shows pinned apps. Groups are local to the
+phone's installed applications.
+
+These ports adapt file transfer to Android document/Share APIs and app grouping
+to touch controls. Desktop shell jobs, SSH configuration and plocate indexing
+remain platform-specific.
+
+`/memes` and `/binup` use native styled gallery/upload popups. Share files or text
+to Kalwer from another app, choose Binup or Memes, and confirm Upload. Binup
+appends to the current paste. Memes uses a private upload key: import it once
+with Key → Import file. Android Keystore protects the saved key; no key is
+packaged in the APK. Downloaded previews share read-only content URIs.

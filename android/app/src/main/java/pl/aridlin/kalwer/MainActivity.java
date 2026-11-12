@@ -69,8 +69,10 @@ public final class MainActivity extends Activity {
     private int selected;
     private boolean capturing;
     private GamePopup gamePopup;
+    private FilePopup filePopup;
+    private ServicePopup servicePopup;
     private AppUpdates updates;
-    boolean updatesVisible(){return !isFinishing() && !isDestroyed() && gamePopup==null && hasWindowFocus();}
+    boolean updatesVisible(){return !isFinishing() && !isDestroyed() && gamePopup==null && filePopup==null && servicePopup==null && hasWindowFocus();}
     private String rewardedCalculation="";
     private static final int IMPORT_WAD=904;
     private static final String[] GAME_COMMANDS={"/snake","/minesweeper","/peggle","/pvz","/chess","/shop","/tetris","/breakout","/kar","/koom","/games"};
@@ -94,7 +96,7 @@ public final class MainActivity extends Activity {
         showKeyboard();
     };
     private final Runnable showIme = () -> {
-        if (gamePopup==null && !capturing && !isFinishing() && query.hasWindowFocus()) {
+        if (gamePopup==null && filePopup==null && servicePopup==null && !capturing && !isFinishing() && query.hasWindowFocus()) {
             ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(query, InputMethodManager.SHOW_IMPLICIT);
         }
     };
@@ -136,7 +138,25 @@ public final class MainActivity extends Activity {
         query.setSelection(query.length());
         if (state != null) selected = state.getInt("selected", 0);
         refreshResults();
+        root.post(()->handleShare(getIntent()));
         if(Appearance.mode>0 || Appearance.popupMode>0)root.post(this::requestBackdrop);
+    }
+
+    private void openService(boolean memes){
+        if(servicePopup!=null)servicePopup.dismiss();
+        query.clearFocus();query.removeCallbacks(showIme);((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);
+        root.setVisibility(View.INVISIBLE);
+        servicePopup=new ServicePopup(this,prefs,memes,popupSnapshot,()->{servicePopup=null;root.setVisibility(View.VISIBLE);showKeyboard();});
+        servicePopup.start();
+    }
+    private boolean handleShare(Intent intent){
+        if(intent==null || !(Intent.ACTION_SEND.equals(intent.getAction())||Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())))return false;
+        Intent shared=new Intent(intent);intent.setAction(Intent.ACTION_MAIN);
+        if(servicePopup!=null)servicePopup.dismiss();
+        new AlertDialog.Builder(this).setTitle("Share to Kalwer").setItems(new String[]{"Binup","Memes"},(dialog,which)->{
+            openService(which==1);servicePopup.incoming(shared);
+        }).setNegativeButton("Cancel",null).show();
+        return true;
     }
 
     private String retainedQuery() {
@@ -155,6 +175,7 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if(handleShare(intent))return;
         if(gamePopup!=null){
             if(!SearchWidget.SEARCH.equals(intent.getAction()))return;
             gamePopup.dismiss();gamePopup=null;root.setVisibility(View.VISIBLE);
@@ -200,7 +221,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showKeyboard() {
-        if(capturing || gamePopup!=null)return;
+        if(capturing || gamePopup!=null || filePopup!=null || servicePopup!=null)return;
         query.requestFocus();
         query.removeCallbacks(showIme);
         query.post(showIme);
@@ -341,14 +362,25 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshResults() {
-        if (query == null || adapter == null) return;
+        if (query == null || adapter == null || isDestroyed() || isFinishing()) return;
         results.clear();
         String q = query.getText().toString().trim();
-        if(q.equals("/updates")){
+        if(q.startsWith("+") || q.equals("/wemote") || q.startsWith("/wemote ")){
+            if(!TextTools.ready()){TextTools.load(this,this::refreshResults);results.add(new Result("Loading text tools…","","",()->{},null));}
+            else for(TextTools.Item item:TextTools.search(q))results.add(new Result(item.value,item.name,"",()->copy(item.value),null));
+        } else if(q.startsWith("&")){categoryResults(q);
+        } else if(q.equals("/categories")){results.add(new Result("Manage app groups","Create and edit &group shortcuts","",()->AppGroups.manage(this,prefs,apps,this::refreshResults),null));
+        } else if(q.equals("/updates")){
             results.add(new Result("Kalwer updates","Check and install updates","↓",()->updates.check(true),null));
         } else if (q.equals("/settings") || q.equals("/config")) {
             results.add(new Result("Kalwer settings", "Transparency, query memory & controls", "⚙", this::settings, null));
         } else if(q.startsWith("/")) {
+            if("/memes".startsWith(q))results.add(new Result("Memes","Browse and upload","▧",()->openService(true),null));
+            if("/binup".startsWith(q))results.add(new Result("Binup","Files and text","↑",()->openService(false),null));
+            if("/file".startsWith(q) || q.startsWith("/file "))results.add(new Result("Files","Browse, preview, copy and share","▤",()->openFiles(true),null));
+            if("/wemote".startsWith(q))results.add(new Result("Emoticons","Search and copy emoticons","☺",()->setQuery("/wemote "),null));
+            if("/unicode".startsWith(q))results.add(new Result("Unicode","Search characters or enter a hex code","+",()->setQuery("+"),null));
+            if("/categories".startsWith(q))results.add(new Result("App groups","Manage &group shortcuts","",()->AppGroups.manage(this,prefs,apps,this::refreshResults),null));
             if(q.equals("/unlockall"))results.add(new Result("Unlock games","","",()->openGame(10,true),null));
             else if(q.equals("/doom"))results.add(new Result("Koom","Play","",()->openGame(9,false),null));
             else if(q.equals("/koins"))results.add(new Result("Koin Shop","Balance, purchases and upgrades","",()->openGame(5,false),null));
@@ -389,6 +421,19 @@ public final class MainActivity extends Activity {
         adapter.notifyDataSetChanged();
     }
 
+    private void openFiles(boolean pick){
+        if(filePopup!=null){filePopup.show();return;}
+        query.clearFocus();query.removeCallbacks(showIme);((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(query.getWindowToken(),0);root.setVisibility(View.INVISIBLE);
+        filePopup=new FilePopup(this,prefs,popupSnapshot,()->{filePopup=null;root.setVisibility(View.VISIBLE);showKeyboard();});
+        if(pick)filePopup.open();else filePopup.show();
+    }
+    private void categoryResults(String q){
+        String[] parts=q.substring(1).split("\\s+",2);String name=parts[0].toLowerCase(java.util.Locale.ROOT);String filter=parts.length>1?parts[1]:"";
+        java.util.List<String> names=AppGroups.names(prefs);java.util.Set<String> ids=name.equals("favourites")?favourites:AppGroups.members(prefs,name);
+        if(name.equals("favourites") || names.contains(name))for(App app:apps){if(ids.contains(app.id) && SearchLogic.scoreNormalized(app.nameKey,app.packageKey,new SearchLogic.Query(filter))>=0)results.add(new Result(app.title,"&"+name,"",()->launch(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(app.component)),app));}
+        else {if("favourites".startsWith(name))results.add(new Result("&favourites","Pinned apps","★",()->setQuery("&favourites "),null));for(String item:names)if(item.startsWith(name))results.add(new Result("&"+item,"App group","",()->setQuery("&"+item+" "),null));}
+        results.add(new Result("Manage app groups","Choose apps for each group","",()->AppGroups.manage(this,prefs,apps,this::refreshResults),null));
+    }
     private void addGoogle(String q) {
         String term = SearchLogic.googleQuery(q);
         results.add(new Result("Search Google", term, "?", () -> launch(new Intent(Intent.ACTION_VIEW,
@@ -396,9 +441,9 @@ public final class MainActivity extends Activity {
     }
 
     private void submit() {
-        if(gamePopup!=null)return;
+        if(gamePopup!=null || filePopup!=null)return;
         String q = query.getText().toString().trim();
-        if (!catalogReady && !q.startsWith("?") && !q.startsWith(">") && !q.startsWith("/")
+        if (!catalogReady && !q.startsWith("?") && !q.startsWith(">") && !q.startsWith("/") && !q.startsWith("+") && !q.startsWith("&")
                 && SearchLogic.calculate(q) == null) {
             pendingSubmit = query.getText().toString();
             status.setText(R.string.apps_waiting);
@@ -577,6 +622,8 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
+        if(request==ServicePopup.PICK||request==ServicePopup.KEY){if(servicePopup!=null)servicePopup.result(request,result,data);return;}
+        if(request==FilePopup.PICK_FILE || request==FilePopup.PICK_FOLDER){if(filePopup==null)openFiles(false);filePopup.result(request,result,data);return;}
         if(request==IMPORT_WAD){
             if(result==RESULT_OK && data!=null && data.getData()!=null){Uri uri=data.getData();String display="import-"+System.currentTimeMillis()+".wad";
                 try(android.database.Cursor names=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){if(names!=null && names.moveToFirst()){String supplied=names.getString(0);if(supplied!=null && !supplied.isEmpty())display=new java.io.File(supplied).getName();}}catch(RuntimeException ignored){}
@@ -612,6 +659,8 @@ public final class MainActivity extends Activity {
         }catch(Exception e){Toast.makeText(this,"Could not read or write that config",Toast.LENGTH_LONG).show();}
     }
     @Override protected void onDestroy(){
+        if(servicePopup!=null){servicePopup.setOnDismissListener(null);servicePopup.dismiss();servicePopup=null;}
+        if(filePopup!=null){filePopup.setOnDismissListener(null);filePopup.dismiss();filePopup=null;}
         if(gamePopup!=null){gamePopup.dismiss();gamePopup=null;}
         query.removeCallbacks(showIme);if(capturing){BackdropCaptureService.receiver.clear();stopService(new Intent(this,BackdropCaptureService.class));}super.onDestroy();
     }

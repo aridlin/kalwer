@@ -1,5 +1,8 @@
 #pragma once
 #include "appearance.hpp"
+#include "file_surface.hpp"
+#include "media_preview_gtk.hpp"
+#include "service_client.hpp"
 #include <algorithm>
 #include <deque>
 #include <functional>
@@ -16,7 +19,11 @@ inline GtkWidget *stack, *grid, *location, *search, *places, *status,
 inline std::string directory, selected, pending_preview;
 inline std::vector<std::string> bookmarks;
 inline unsigned generation = 0;
-inline bool previewing = false;
+inline bool previewing = false, service_mode = false;
+inline std::function<void(const std::string &)> external_open, external_copy,
+    external_search;
+inline std::function<void()> external_more, external_activate;
+inline std::function<bool()> external_escape;
 inline GtkWidget *scroller = nullptr;
 inline GCancellable *listing_cancel = nullptr;
 inline guint viewport_idle = 0, append_idle = 0;
@@ -63,14 +70,29 @@ inline void transfer(GtkSelectionData *data, guint type,
     gtk_selection_data_set_uris(data, uris);
   }
 }
-inline void copy() {
-  if (selected.empty())
+inline std::string selection_path() {
+  std::string path = selected;
+  if (!previewing) {
+    path.clear();
+    auto rows = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(grid));
+    if (rows) {
+      auto value = static_cast<const char *>(
+          g_object_get_data(G_OBJECT(rows->data), "path"));
+      if (value)
+        path = value;
+    }
+    g_list_free(rows);
+  }
+  return path;
+}
+inline void copy_path(const std::string &path) {
+  if (path.empty())
     return;
-  if (!g_file_test(selected.c_str(), G_FILE_TEST_IS_REGULAR)) {
+  if (!g_file_test(path.c_str(), G_FILE_TEST_EXISTS)) {
     gtk_label_set_text(GTK_LABEL(status), "File is no longer available.");
     return;
   }
-  auto value = new std::string(selected);
+  auto value = new std::string(path);
   if (!gtk_clipboard_set_with_data(
           gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), targets,
           G_N_ELEMENTS(targets),
@@ -83,7 +105,16 @@ inline void copy() {
           value))
     delete value;
 }
+inline void copy() {
+  auto path = selection_path();
+  if (external_copy) {
+    external_copy(path);
+    return;
+  }
+  copy_path(path);
+}
 inline void drag(GtkWidget *widget, const std::string &path) {
+  g_object_set_data(G_OBJECT(widget), "drag-enabled", GINT_TO_POINTER(1));
   g_object_set_data_full(G_OBJECT(widget), "file-path", g_strdup(path.c_str()),
                          g_free);
   gtk_drag_source_set(widget, GDK_BUTTON1_MASK, targets, G_N_ELEMENTS(targets),
@@ -212,7 +243,17 @@ inline void pump_images() {
         task, +[](GTask *task, gpointer, gpointer data, GCancellable *) {
           auto w = static_cast<ImageWork *>(data);
           std::string path;
-          if (w->size == 96)
+          if (w->path.starts_with(kalwer::services::meme_base) ||
+              w->path.starts_with(std::string(kalwer::services::bin_base) +
+                                  "/file/"))
+            try {
+              path = kalwer::services::download(w->path, "thumbnail.jpg",
+                                                8 * 1024 * 1024);
+            } catch (...) {
+              g_task_return_pointer(task, nullptr, nullptr);
+              return;
+            }
+          if (path.empty() && w->size == 96)
             path = cached_thumbnail(w->path);
           if (path.empty()) {
             auto type =
@@ -304,8 +345,9 @@ inline void clear(GtkWidget *box) {
 inline void browse(std::string path);
 inline void back() {
   previewing = false;
+  kalwer::media::pause_under(preview_box);
   gtk_stack_set_visible_child_name(GTK_STACK(stack), "files");
-  gtk_widget_show(toolbar);
+  gtk_widget_set_visible(toolbar, !service_mode);
   gtk_widget_show(browser_tools);
   gtk_widget_grab_focus(grid);
   queue_visible();
@@ -333,7 +375,11 @@ inline void show_file(const std::string &path) {
   gtk_box_pack_start(GTK_BOX(preview_box), event, TRUE, TRUE, 0);
   drag(event, path);
   auto type = g_content_type_guess(path.c_str(), nullptr, 0, nullptr);
-  if (type && g_content_type_is_a(type, "text/plain")) {
+  auto media = kalwer::media::create(path);
+  if (media) {
+    gtk_widget_destroy(event);
+    gtk_box_pack_start(GTK_BOX(preview_box), media, TRUE, TRUE, 0);
+  } else if (type && g_content_type_is_a(type, "text/plain")) {
     auto scroll = gtk_scrolled_window_new(nullptr, nullptr);
     auto view = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
@@ -440,7 +486,7 @@ inline void append_page() {
     g_object_set_data_full(G_OBJECT(child), "path", g_strdup(e.path.c_str()),
                            g_free);
     gtk_widget_set_tooltip_text(child, e.path.c_str());
-    if (!e.folder)
+    if (!e.folder && g_file_test(e.path.c_str(), G_FILE_TEST_IS_REGULAR))
       drag(tile, e.path);
     g_signal_connect(tile, "button-press-event",
                      G_CALLBACK(+[](GtkWidget *tile, GdkEventButton *event,
@@ -458,8 +504,10 @@ inline void append_page() {
                      }),
                      nullptr);
     if (!e.folder) {
-      g_object_set_data_full(G_OBJECT(image), "thumbnail-path",
-                             g_strdup(e.path.c_str()), g_free);
+      g_object_set_data_full(
+          G_OBJECT(image), "thumbnail-path",
+          g_strdup(e.thumbnail.empty() ? e.path.c_str() : e.thumbnail.c_str()),
+          g_free);
       auto stamp = new guint64(e.modified_us);
       g_object_set_data_full(
           G_OBJECT(image), "modified-us", stamp,
@@ -529,8 +577,13 @@ inline void queue_visible() {
 }
 inline void scroll_changed() {
   queue_visible();
-  if (!window || append_idle || rendered >= matches.size())
+  if (!window || append_idle)
     return;
+  if (rendered >= matches.size()) {
+    if (external_more)
+      external_more();
+    return;
+  }
   auto a = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller));
   auto remaining = gtk_adjustment_get_upper(a) - gtk_adjustment_get_value(a) -
                    gtk_adjustment_get_page_size(a);
@@ -690,6 +743,8 @@ inline GtkWidget *icon_button(GtkWidget *box, const char *icon,
 }
 inline gboolean key(GdkEventKey *e) {
   if (e->keyval == GDK_KEY_Escape) {
+    if (external_escape && external_escape())
+      return TRUE;
     if (previewing)
       back();
     else
@@ -698,11 +753,16 @@ inline gboolean key(GdkEventKey *e) {
   }
   if (!previewing && (e->state & GDK_CONTROL_MASK) &&
       (e->keyval == GDK_KEY_f || e->keyval == GDK_KEY_l)) {
-    gtk_widget_grab_focus(e->keyval == GDK_KEY_f ? search : location);
+    gtk_widget_grab_focus(e->keyval == GDK_KEY_f || service_mode ? search
+                                                                 : location);
     return TRUE;
   }
   if (!previewing && gtk_widget_has_focus(search) &&
       (e->keyval == GDK_KEY_Down || e->keyval == GDK_KEY_Return)) {
+    if (e->keyval == GDK_KEY_Return && external_activate) {
+      external_activate();
+      return TRUE;
+    }
     auto children = gtk_container_get_children(GTK_CONTAINER(grid));
     for (auto p = children; p; p = p->next)
       if (gtk_widget_get_child_visible(GTK_WIDGET(p->data))) {
@@ -716,7 +776,9 @@ inline gboolean key(GdkEventKey *e) {
     g_list_free(children);
     return TRUE;
   }
-  if (previewing && (e->state & GDK_CONTROL_MASK) &&
+  if ((previewing ||
+       (!gtk_widget_has_focus(search) && !gtk_widget_has_focus(location))) &&
+      (e->state & GDK_CONTROL_MASK) &&
       (e->keyval == GDK_KEY_c || e->keyval == GDK_KEY_C)) {
     copy();
     return TRUE;
@@ -725,6 +787,8 @@ inline gboolean key(GdkEventKey *e) {
       !gtk_widget_has_focus(location) &&
       !(e->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK))) {
     if (e->keyval == GDK_KEY_BackSpace) {
+      if (service_mode)
+        return TRUE;
       auto parent = g_path_get_dirname(directory.c_str());
       browse(parent);
       g_free(parent);
@@ -743,7 +807,15 @@ inline gboolean key(GdkEventKey *e) {
   return FALSE;
 }
 inline GtkWidget *create(GtkWidget *host, std::string path,
-                         std::function<void()> close) {
+                         std::function<void()> close,
+                         bool start_listing = true) {
+  external_open = {};
+  external_copy = {};
+  external_search = {};
+  external_more = {};
+  external_activate = {};
+  external_escape = {};
+  service_mode = false;
   window = host;
   gtk_style_context_add_class(gtk_widget_get_style_context(host),
                               "kalwer-file-host");
@@ -817,8 +889,12 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   gtk_entry_set_placeholder_text(GTK_ENTRY(search), "Find a file…");
   gtk_box_pack_start(GTK_BOX(browser_tools), search, FALSE, FALSE, 0);
   g_signal_connect(search, "activate", G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     refill();
-                     first_match(true);
+                     if (external_activate)
+                       external_activate();
+                     else {
+                       refill();
+                       first_match(true);
+                     }
                    }),
                    nullptr);
   auto scroll = gtk_scrolled_window_new(nullptr, nullptr);
@@ -846,13 +922,22 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
                    nullptr);
   gtk_container_add(GTK_CONTAINER(scroll), grid);
   g_signal_connect(search, "search-changed",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) { refill(); }),
+                   G_CALLBACK(+[](GtkWidget *, gpointer) {
+                     if (external_search)
+                       external_search(gtk_entry_get_text(GTK_ENTRY(search)));
+                     else
+                       refill();
+                   }),
                    nullptr);
   g_signal_connect(
       grid, "child-activated",
       G_CALLBACK(+[](GtkFlowBox *, GtkFlowBoxChild *child, gpointer) {
-        browse(static_cast<const char *>(
-            g_object_get_data(G_OBJECT(child), "path")));
+        auto path = static_cast<const char *>(
+            g_object_get_data(G_OBJECT(child), "path"));
+        if (external_open)
+          external_open(path);
+        else
+          browse(path);
       }),
       nullptr);
   auto preview = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
@@ -880,6 +965,14 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   g_signal_connect(
       window, "destroy", G_CALLBACK(+[](GtkWidget *host, gpointer) {
         window = nullptr;
+        external_open = {};
+        external_copy = {};
+        external_search = {};
+        external_more = {};
+        external_activate = {};
+        external_activate = {};
+        external_escape = {};
+        service_mode = false;
         ++generation;
         if (listing_cancel)
           g_cancellable_cancel(listing_cancel);
@@ -928,7 +1021,7 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
           ".kalwer-file-host * "
           "{-GtkWidget-window-dragging:false;} "
           "#kalwer-file-content "
-          "{background:#00130b;color:#cfe3d2;font-family:'JetBrainsMono "
+          "{background:transparent;color:#cfe3d2;font-family:'JetBrainsMono "
           "Nerd Font',monospace;font-size:10px;} "
           "#kalwer-file-content label {color:#cfe3d2;} "
           "#kalwer-file-content button,#kalwer-file-content entry "
@@ -963,7 +1056,7 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
           "{background:#073c23;border-color:#75d191;} "
           "#kalwer-file-content flowboxchild:hover {background:#082f1e;} "
           "#kalwer-file-content textview text "
-          "{background:#00130b;color:#cfe3d2;} #kalwer-file-content "
+          "{background:transparent;color:#cfe3d2;} #kalwer-file-content "
           "entry selection {background:#256c43;} "
           "#kalwer-file-content scrollbar slider "
           "{background:#315f43;min-width:4px;min-height:20px;}")
@@ -974,6 +1067,8 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   file_css = css;
   gtk_widget_show_all(root);
+  if (!start_listing)
+    return root;
   auto initial = expand(path);
   if (g_file_test(initial.c_str(), G_FILE_TEST_IS_REGULAR)) {
     auto parent = g_path_get_dirname(initial.c_str());

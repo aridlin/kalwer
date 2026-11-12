@@ -1,3 +1,4 @@
+#include "service_popup_gtk.hpp"
 #include "file_browser_gtk.hpp"
 #include "release_selection.hpp"
 #include "multiline_gtk.hpp"
@@ -1585,6 +1586,7 @@ double output_elapsed_ms() {
 void close_output_and_kalwer() {
     if (!state.output_window) { hide_kalwer(); return; }
     if (state.output_closing) return;
+    if(state.output_files)kalwer::media::pause_under(state.output_content);
     if (state.output_game) kalwer::games::canvas_game(state.output_game)->focus(false);
     if (state.output_fred) kalwer::fred_popup::focus(state.output_fred, false);
     state.output_close_origin = std::min(output_elapsed_ms(),
@@ -1680,7 +1682,7 @@ gboolean on_output_draw(GtkWidget* widget, cairo_t* cr, gpointer) {
         cairo_rectangle(cr, line_start, hinge_y, width - line_start - 8.0,
                         height);
         theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
-        cairo_fill_preserve(cr);
+        if(state.output_files){cairo_new_path(cr);kalwer::files::surface_mask.paint(cr,line_start,hinge_y,width-line_start-8.,height);cairo_rectangle(cr,line_start,hinge_y,width-line_start-8.,height);}else cairo_fill_preserve(cr);
         cairo_set_line_width(cr, state.output_game ? 2.0 : 1.5);
         theme_source_rgba(cr, 0.46, 0.82, 0.57, 1.0);
         cairo_stroke(cr);
@@ -1963,7 +1965,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_container_add(GTK_CONTAINER(overlay), state.output_canvas);
 
     state.output_content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_name(state.output_content, game ? "kalwer-game-content" : "kalwer-output-content");
+    gtk_widget_set_name(state.output_content, files?"kalwer-file-shell":game ? "kalwer-game-content" : "kalwer-output-content");
     gtk_widget_set_halign(state.output_content, GTK_ALIGN_FILL);
     gtk_widget_set_valign(state.output_content, GTK_ALIGN_START);
     gtk_widget_set_margin_start(state.output_content, 19);
@@ -2002,7 +2004,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_box_pack_start(GTK_BOX(state.output_content),header,FALSE,FALSE,0);
 
     if(files) {
-        auto browser=kalwer::files::create(state.output_window,document.body,[]{close_output_and_kalwer();});
+        auto browser=(document.title=="/memes"||document.title=="/binup")?kalwer::services::create(state.output_window,document.title=="/memes",[]{close_output_and_kalwer();}):kalwer::files::create(state.output_window,document.body,[]{close_output_and_kalwer();});
         gtk_box_pack_start(GTK_BOX(state.output_content),browser,TRUE,TRUE,0);
     } else if (terminal) {
     state.output_terminal = vte_terminal_new();
@@ -2727,9 +2729,9 @@ void activate_selection(bool elevated = false) {
     }
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/file") {
+        if (name == "/file" || name=="/memes" || name=="/binup") {
             auto input=std::string(gtk_entry_get_text(GTK_ENTRY(state.entry)));
-            open_popup({"/file",input.size()>5?trim_copy(input.substr(5)):std::string{}},{},std::nullopt,false,true);
+            open_popup({name,input.size()>name.size()?trim_copy(input.substr(name.size())):std::string{}},{},std::nullopt,false,true);
             stop_query(); state.opening=state.closing=false; gtk_widget_hide(state.window);
         }
         else if (name == "/fred") {

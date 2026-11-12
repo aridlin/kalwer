@@ -17,6 +17,8 @@ inline constexpr std::array commands = {
     Command{"/breakout", "Paddle, ball and three brick boards", ""},
     Command{"/kar", "Native arcade phone racing", ""},
 #ifdef __linux__
+    Command{"/memes", "Browse memes.aridlin.pl and upload memes", ""},
+    Command{"/binup", "Upload files or text and copy Binup links", ""},
     Command{"/file", "Browse files with thumbnails, preview and bookmarks: /file [path]", ""},
     Command{"/fred", "Fred: native Spectrum port in a larger popup", ""},
 #endif

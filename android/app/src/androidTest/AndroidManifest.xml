@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <provider android:name="pl.aridlin.kalwer.TestFileProvider" android:authorities="pl.aridlin.kalwer.test.documents" android:exported="true" android:grantUriPermissions="true" />
+  </application>
+</manifest>
