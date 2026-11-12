@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--reference", required=True, type=Path)
     parser.add_argument("--source", type=Path, help="Clean checkout of the pinned native port")
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--windows", action="store_true", help="Also cross-compile the private Windows DLL with MinGW after native verification")
     args = parser.parse_args()
     source = (args.source or ROOT / "build-fred/source").resolve()
     if not source.exists():
@@ -74,6 +75,25 @@ def main():
         build / "libfred_core.a", "-o", output)
     run(build / "fred_app", "--no-wait", cwd=source)
     run("ctest", "--test-dir", build, "-R", "^fred_tests$", "--output-on-failure")
+    if args.windows:
+        dll = ROOT / "build-fred/kalwer-fred.dll"
+        sources = [source / "src/fred_core/game.cpp",
+                   source / "src/fred_original_data/original_data.cpp",
+                   source / "src/fred_original_data/generated/reference_metadata.cpp",
+                   source / "src/fred_original_presentation/audio.cpp",
+                   source / "src/fred_original_presentation/render.cpp"]
+        private = [generated / name for name in
+                   ("screen_source_region_9400_a8ff.cpp", "original_first_update_state.cpp",
+                    "component_writer_lookup_table_64d3_64f0.cpp", "original_menu_screen.cpp")]
+        if any(not p.is_file() for p in private):
+            raise SystemExit("Verified native generation must finish before building Windows")
+        run(os.environ.get("WINDOWS_CXX", "x86_64-w64-mingw32-g++"),
+            "-std=c++14", "-O2", "-shared", "-static", ROOT / "fred/adapter.cpp",
+            *sources, *private, "-I" + str(source / "include"), "-I" + str(generated),
+            "-DFRED_HAS_PRIVATE_SCREEN_SOURCE=1", "-DFRED_HAS_PRIVATE_FIRST_UPDATE_STATE=1",
+            "-DFRED_HAS_PRIVATE_COMPONENT_WRITER_LOOKUP=1", "-DFRED_HAS_PRIVATE_MENU_SCREEN=1",
+            "-o", dll)
+        print("Private Windows module (do not distribute):", dll)
     if args.install:
         dest = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "kalwer/fred/libkalwer-fred.so"
         dest.parent.mkdir(parents=True, exist_ok=True)

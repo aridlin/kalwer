@@ -16,12 +16,10 @@ inline constexpr std::array commands = {
     Command{"/tetris", "Falling blocks, line clears and ghost piece", ""},
     Command{"/breakout", "Paddle, ball and three brick boards", ""},
     Command{"/kar", "Native arcade phone racing", ""},
-#ifdef __linux__
     Command{"/memes", "Browse memes.aridlin.pl and upload memes", ""},
     Command{"/binup", "Upload files or text and copy Binup links", ""},
     Command{"/file", "Browse files with thumbnails, preview and bookmarks: /file [path]", ""},
     Command{"/fred", "Fred: native Spectrum port in a larger popup", ""},
-#endif
     Command{"/koom", "Doom-compatible Freedoom player", ""},
     Command{"/snake", "Play native Snake (pauses when unfocused)", ""},
     Command{"/minesweeper", "Play native Minesweeper", ""},
@@ -31,6 +29,9 @@ inline constexpr std::array commands = {
     Command{"/shop", "Spend koins on minigame unlocks", ""},
     Command{"/koins", "Your permanent koins and wins", ""},
     Command{"/malcip", "Toggle the MALCIP cinematic desktop overlay", ""},
+ #ifdef _WIN32
+    Command{"/categories", "Manage app groups", ""},
+ #endif
     Command{"/config", "Appearance and configuration", ""},
     Command{"/config-save", "Save appearance preset", ""},
     Command{"/config-load", "Restore appearance preset", ""},

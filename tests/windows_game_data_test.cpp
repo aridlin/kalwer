@@ -6,6 +6,11 @@
 #include <iostream>
 int main(){
  load_settings();
+ kalwer::winservices::Http http;
+ auto gallery=kalwer::winservices::memes(http,"","all",0);assert(gallery.at("items").is_array()&&gallery.at("items").size()<=48&&!gallery.at("categories").empty());
+ auto paste=kalwer::winservices::Json::parse(http.request("https://bin.aridlin.pl/items"));assert(paste.is_array());
+ std::cout<<"Native Windows HTTPS Memes/Binup catalogs passed.\n";
+
  auto root=std::filesystem::temp_directory_path()/L"kalwer-first-use-zażółć";
  std::filesystem::remove_all(root);
  auto artwork=kalwer::games::kar_pixels::ArtRequest::start(root/"kar"/"art.karp");

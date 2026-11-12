@@ -379,10 +379,15 @@ upload_bin(const std::vector<std::string> &paths,
           "Binup allows 1 GiB per file and 2 GiB per paste.");
     if (i)
       body += ",";
+    auto type = g_content_type_guess(paths[i].c_str(), nullptr, 0, nullptr);
+    auto mime = g_content_type_get_mime_type(type);
+    g_free(type);
+    std::string content_type = mime ? mime : "application/octet-stream";
+    g_free(mime);
     body += "{\"name\":" +
             quote(std::filesystem::path(paths[i]).filename().string()) +
-            ",\"mime\":\"application/octet-stream\",\"size\":" +
-            std::to_string(size) + "}";
+            ",\"mime\":" + quote(content_type) +
+            ",\"size\":" + std::to_string(size) + "}";
   }
   body += "]}";
   auto headers = std::vector<std::string>{"X-CSRF-Token: " + csrf,

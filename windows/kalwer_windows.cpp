@@ -56,6 +56,9 @@
 #include <utility>
 #include <map>
 #include <vector>
+#include "file_popup.hpp"
+#include "categories.hpp"
+#include "fred.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -86,7 +89,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.11.2";
+constexpr wchar_t kKalwerVersion[] = L"0.13.2";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -601,6 +604,8 @@ struct State {
     std::vector<AppEntry> results;
     std::vector<std::wstring> favorites;
     std::vector<std::unique_ptr<CommandJob>> jobs;
+    std::shared_ptr<kalwer::winfred::Session> popup_fred;
+    std::shared_ptr<kalwer::winfiles::Panel> popup_browser;
     CommandJob* popup_job = nullptr;
     std::optional<kalwer::PopupDocument> popup_document;
     size_t popup_document_scroll = 0;
@@ -652,6 +657,9 @@ struct State {
 };
 
 State state;
+bool detached_popup(){return state.popup_game || state.popup_browser || state.popup_fred;}
+POINT browser_drag_origin{}; bool browser_drag_pending=false;
+std::vector<std::filesystem::path> startup_shared_files;
 kalwer_files::Index file_index;
 unsigned long long file_request = 0, file_revision = 0;
 std::wstring file_status = L"Indexing files…";
@@ -1269,6 +1277,19 @@ void accept_results(std::vector<AppEntry> results) {
 }
 void open_settings_popup();
 
+std::vector<kalwer::wingroups::App> group_apps() {
+  std::vector<kalwer::wingroups::App> apps;
+  if (state.app_snapshot)
+    for (auto &a : *state.app_snapshot)
+      apps.push_back({a.link.wstring(), a.title, a.link.wstring()});
+  for (auto &c : kalwer::commands)
+    if (kalwer::games::is_command(std::string(c.name)))
+      apps.push_back({L"kalwer:" + wide(std::string(c.name)),
+                      L"Kalwer " + wide(std::string(c.name)), L"Games"});
+  return apps;
+}
+void edit_groups() { kalwer::wingroups::edit(state.window, group_apps()); }
+
 void update_results() {
     app_search.cancel();
     state.search_pending=false; state.pending_activate=false; state.restore_search_selection=false;
@@ -1277,7 +1298,14 @@ void update_results() {
     std::vector<AppEntry> filtered;
 
     const auto home=std::filesystem::path(_wgetenv(L"USERPROFILE")?_wgetenv(L"USERPROFILE"):L".");
-    if (auto rows=kalwer::native::search(utf8(raw_query),home)) {
+    if(!raw_query.empty()&&raw_query.front()==L'&'){
+        auto groups=kalwer::wingroups::load();auto end=query.find(L' ');auto name=query.substr(1,end==query.npos?query.npos:end-1);auto filter=end==query.npos?L"":trim_copy(query.substr(end+1));
+        if(name==L"manage"){AppEntry r;r.title=L"Manage app groups";r.link=L"::groups";filtered.push_back(r);}
+        else if(name==L"favorites"||name==L"favourites"){if(state.app_snapshot)for(auto app:*state.app_snapshot)if(std::find(state.favorites.begin(),state.favorites.end(),lower_copy(app.link.wstring()))!=state.favorites.end()&&lower_copy(app.title).find(filter)!=std::wstring::npos)filtered.push_back(app);}
+        else {auto group=std::find_if(groups.begin(),groups.end(),[&](auto&g){return kalwer::winfiles::lower(g.name)==name;});if(group!=groups.end()){for(auto&a:kalwer::wingroups::members(*group,group_apps(),filter)){if(a.id.starts_with(L"kalwer:")){AppEntry r;r.title=a.name;r.link=L"::slash";r.payload=a.id.substr(7);filtered.push_back(r);}else if(state.app_snapshot){auto found=std::find_if(state.app_snapshot->begin(),state.app_snapshot->end(),[&](auto&app){return app.link.wstring()==a.id;});if(found!=state.app_snapshot->end())filtered.push_back(*found);}}}else{for(auto&g:groups)if(kalwer::winfiles::lower(g.name).starts_with(name)){AppEntry r;r.title=L"&"+g.name;r.subtitle=L"App group";r.link=L"::group";r.payload=g.name;filtered.push_back(r);}AppEntry r;r.title=L"Manage app groups";r.link=L"::groups";filtered.push_back(r);}}
+    } else if(!raw_query.empty()&&raw_query.front()==L'*'){
+        auto command=kalwer::notes::parse(utf8(raw_query));AppEntry r;r.title=command.save?L"Save note":command.name=="login"?L"Sign in to Notes":L"Notes";r.subtitle=wide(command.save?command.text:command.name);r.link=L"::notes";r.payload=raw_query;filtered.push_back(std::move(r));
+    } else if (auto rows=kalwer::native::search(utf8(raw_query),home)) {
         for(const auto& row:*rows) {
             AppEntry r;r.title=wide(row.title);r.subtitle=wide(row.subtitle);r.payload=wide(row.payload);r.character_preview=wide(row.preview);
             r.link=row.action==kalwer::native::Action::Copy?L"::copy":row.action==kalwer::native::Action::Ssh?L"::ssh":L"::info";
@@ -1717,6 +1745,8 @@ void close_popup(bool background, bool terminate) {
     state.popup_closed_at = std::chrono::steady_clock::now();
     state.popup_closing = true;
     if (state.popup_game) {state.popup_game->focus(false);}
+    if(state.popup_browser)state.popup_browser->shutdown();
+    if(state.popup_fred)state.popup_fred->focus(false);
     state.popup_selecting = false; state.popup_pressed = PopupButton::none;
     ReleaseCapture();
     CommandJob* job = state.popup_job;
@@ -1901,19 +1931,129 @@ void open_settings_popup() {
     SetFocus(GetDlgItem(state.settings_window,200));
 }
 
+void open_file_popup(const std::string &service,
+                     const std::wstring &path = {}) {
+  open_popup({service.empty()      ? "Files"
+              : service == "memes" ? "Memes"
+              : service == "notes" ? "Notes"
+                                   : "Binup",
+              ""});
+  auto p = std::make_shared<kalwer::winfiles::Panel>();
+  p->owner = state.window;
+  p->service = service;
+  p->meme = service == "memes";
+  p->load_places();
+  p->close = [] { close_popup(false, false); };
+  state.popup_browser = p;
+  if (service.empty())
+    p->browse(path);
+  else
+    p->fetch();
+  state.opening = state.closing = false;
+  position_and_resize();
+}
+void show_shared_files(const std::vector<std::filesystem::path> &paths) {
+  if (paths.empty() || paths.size() > 16)
+    return;
+  if (state.popup_browser) {
+    state.popup_browser->shutdown();
+    state.popup_browser.reset();
+  }
+  open_popup({"Share", ""});
+  auto p = std::make_shared<kalwer::winfiles::Panel>();
+  p->owner = state.window;
+  p->close = [] { close_popup(false, false); };
+  p->load_places();
+  state.popup_browser = p;
+  position_and_resize();
+  ++p->generation;
+  p->incoming = true;
+  p->shared_paths = paths;
+  p->entries.clear();
+  for (auto &path : paths) {
+    kalwer::winfiles::Entry e;
+    e.path = path;
+    e.name = path.filename().wstring();
+    p->entries.push_back(e);
+  }
+  p->filter();
+  p->selected = paths.front();
+  p->preview = p->review = false;
+  state.visible = true;
+  state.closing = state.opening = false;
+  ShowWindow(state.window, SW_SHOW);
+  SetForegroundWindow(state.window);
+  SetFocus(state.edit);
+  state.render_dirty = true;
+}
+void install_send_to() {
+  PWSTR raw = nullptr;
+  if (FAILED(
+          SHGetKnownFolderPath(FOLDERID_SendTo, KF_FLAG_CREATE, nullptr, &raw)))
+    return;
+  auto path = std::filesystem::path(raw) / L"Kalwer.lnk";
+  CoTaskMemFree(raw);
+  if (std::filesystem::exists(path))
+    return;
+  ComPtr<IShellLinkW> link;
+  ComPtr<IPersistFile> file;
+  if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                 IID_PPV_ARGS(link.GetAddressOf())))) {
+    link->SetPath(executable_path().c_str());
+    link->SetArguments(L"--share");
+    link->SetIconLocation(executable_path().c_str(), 0);
+    if (SUCCEEDED(link.As(&file)))
+      file->Save(path.c_str(), TRUE);
+  }
+}
+
+void open_notes_command(const std::wstring &input) {
+  auto command = kalwer::notes::parse(utf8(input));
+  if (command.name == "help") {
+    open_popup({"NOTES", kalwer::notes::help});
+    return;
+  }
+  if (command.name == "web") {
+    ShellExecuteW(state.window, L"open", L"https://notes.aridlin.pl", nullptr,
+                  nullptr, SW_SHOWNORMAL);
+    return;
+  }
+  open_popup({"Notes", ""});
+  auto p = std::make_shared<kalwer::winfiles::Panel>();
+  p->owner = state.window;
+  p->service = "notes";
+  p->note_saved = [] { SetWindowTextW(state.edit, L"*read"); };
+  p->close = [] { close_popup(false, false); };
+  state.popup_browser = p;
+  position_and_resize();
+  if (command.name == "login")
+    p->notes_login();
+  else
+    p->notes_fetch(command);
+}
+
 void activate_selection(bool elevated = false) {
     if(state.search_pending) { state.pending_activate=true; state.pending_elevated=elevated; return; }
     if (state.results.empty()) return;
     const AppEntry& result = state.results[static_cast<size_t>(state.selection)];
+    if(result.link==L"::groups"){edit_groups();update_results();return;}
+    if(result.link==L"::group"){SetWindowTextW(state.edit,(L"&"+result.payload+L" ").c_str());SendMessageW(state.edit,EM_SETSEL,-1,-1);return;}
+    if(result.link==L"::notes"){open_notes_command(result.payload);return;}
     if (result.link == L"::slash") {
         const auto name = utf8(result.payload);
-        if (kalwer::games::is_command(name)) {
+        if(name=="/file"||name=="/memes"||name=="/binup"){
+            auto input=window_text(state.edit);auto path=name=="/file"?trim_copy(input.substr(std::min<size_t>(5,input.size()))):L"";
+            if(path.size()>1&&path.front()==L'"'&&path.back()==L'"')path=path.substr(1,path.size()-2);
+            open_file_popup(name=="/file"?"":name.substr(1),path);
+        }
+        else if (kalwer::games::is_command(name)) {
             state.popup_game = std::make_unique<kalwer::games::Game>(kalwer::games::command_kind(name));
             state.popup_game->focus(GetForegroundWindow() == state.window);
             state.game_last = std::chrono::steady_clock::now();
             state.opening = state.closing = false;
             open_popup({kalwer::games::name(state.popup_game->kind), ""});
         }
+        else if(name=="/fred") {open_popup({"Fred",""});state.popup_fred=std::make_shared<kalwer::winfred::Session>();state.popup_fred->focus(GetForegroundWindow()==state.window);position_and_resize();}
         else if(name=="/kar-import") {
             auto query=window_text(state.edit);auto path=trim_copy(query.substr(std::min<size_t>(11,query.size())));
             if(path.size()>1 && path.front()==L'"' && path.back()==L'"')path=path.substr(1,path.size()-2);
@@ -1926,10 +2066,12 @@ void activate_selection(bool elevated = false) {
         }
         else if (name == "/unlockall") {open_popup({"GAMES",kalwer::wallet.unlock_games()?"All games are unlocked.":"Could not save unlocks. Nothing changed."});}
         else if (name == "/koins") open_popup({"KOINS",std::to_string(kalwer::wallet.balance)+" koins\n"+std::to_string(kalwer::wallet.wins)+" wins\n\nUse /shop for permanent minigame boards, variants and cosmetics. Base games and retries are free."});
+        else if(name=="/categories"){edit_groups();update_results();}
+        else if(name=="/malcip"){auto module=local_data_directory()/L"malcip"/L"malcip.exe";if(std::filesystem::is_regular_file(module))ShellExecuteW(state.window,L"open",module.c_str(),L"toggle",nullptr,SW_SHOWNORMAL);else open_popup({"MALCIP","Install the Windows MALCIP companion in your Kalwer data folder first."});}
         else if (name == "/config-save") open_popup({"CONFIG",kalwer::appearance.save("preset.ini")?"Appearance preset saved.":"Could not save preset."});
         else if (name == "/config-load") {bool ok=kalwer::appearance.load("preset.ini");if(ok)save_settings();open_popup({"CONFIG",ok?"Preset restored.":"No readable preset found."});}
         else if (name == "/config") open_settings_popup();
-        else if (name == "/help") open_popup(kalwer::help());
+        else if (name == "/help") {auto help=kalwer::help();help.body+="\nNOTES\n";help.body+=kalwer::notes::help;open_popup(help);}
         else if (name == "/updates") { update_failed_on_launch = false; request_update_check(true); open_popup({"KALWER UPDATES", "Running v" + utf8(kKalwerVersion) + "\n\n" + update_status.get()}); }
         else if (name == "/index") open_popup({"SYSTEM FILE SEARCH", file_index.status() + "\n\nEverything supplies the system-wide index. NTFS/ReFS volumes update live. Use Everything's folder-indexing options for other filesystems or network shares.\n\n/index-setup: official Everything download page\n/reindex: ask Everything to rebuild"});
         else if (name == "/index-setup") setup_everything();
@@ -2193,6 +2335,10 @@ HRESULT create_graphics_device() {
                                    levels + 1, ARRAYSIZE(levels) - 1, D3D11_SDK_VERSION,
                                    render.d3d.GetAddressOf(), &actual_level,
                                    render.d3d_context.GetAddressOf());
+    }
+    if(FAILED(result)){
+        render.d3d.Reset();render.d3d_context.Reset();
+        result=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,levels+1,ARRAYSIZE(levels)-1,D3D11_SDK_VERSION,render.d3d.GetAddressOf(),&actual_level,render.d3d_context.GetAddressOf());
     }
     if (FAILED(result)) return result;
 
@@ -2747,7 +2893,7 @@ PopupButton popup_button_at(float x, float y) {
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
     constexpr float top = 50.0f;
     if (y < top || y > top + 25.0f) return PopupButton::none;
-    if (!state.popup_game && x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
+    if (!state.popup_game && !state.popup_fred && x >= panel_right - 142 && x <= panel_right - 92) return PopupButton::copy;
     if (elevated_command.empty() && state.popup_job && x >= panel_right - 86 && x <= panel_right - 49) return PopupButton::background;
     if (x >= panel_right - 43 && x <= panel_right - 10) return PopupButton::close;
     return PopupButton::none;
@@ -2828,6 +2974,279 @@ struct GamePainter {
     }
 };
 
+void draw_file_panel(float left, float top) {
+  auto p = state.popup_browser.get();
+  if (!p)
+    return;
+  auto &r = state.render;
+  p->hits.clear();
+  p->animating = false;
+  auto text = [&](const std::wstring &s, float x, float y,
+                  float width = 440.f) {
+    draw_text(s, r.tiny_format.Get(), left + x, top + y, left + x + width,
+              top + y + 36, color(.72f, .94f, .79f));
+  };
+  auto button = [&](const wchar_t *label, float x, float y, float width,
+                    std::function<void()> action) {
+    int index = int(p->hits.size());
+    float target = p->hovered == index ? 1.f : 0.f;
+    auto &amount = p->hover_amount[index];
+    amount += (target - amount) * .25f;
+    if (std::abs(target - amount) > .01f)
+      p->animating = true;
+    fill_round(left + x, top + y, left + x + width, top + y + 30, 5,
+               color(.03f + amount * .045f, .16f + amount * .10f,
+                     .10f + amount * .05f, .92f));
+    text(label, x + 6, y + 5, width - 8);
+    p->hits.push_back({x, y, width, 30, std::move(action)});
+  };
+  button(L"Back", 0, 0, 58, [p] { p->back(); });
+  button(L"Find", 64, 0, 58, [p] { p->change_query(); });
+  if (p->incoming) {
+    button(L"Binup", 128, 0, 100, [p] {
+      if (p->busy)
+        return;
+      p->incoming = false;
+      p->service = "binup";
+      p->meme = false;
+      p->review = true;
+    });
+    button(L"Memes", 234, 0, 100, [p] {
+      if (p->busy)
+        return;
+      p->incoming = false;
+      p->service = "memes";
+      p->meme = true;
+      p->review = true;
+      p->run(
+          [](kalwer::winservices::Http &h) {
+            return kalwer::winservices::memes(h, "", "all", 0)
+                .at("categories")
+                .get<std::vector<std::string>>();
+          },
+          [](kalwer::winfiles::Panel &panel,
+             std::vector<std::string> categories) {
+            panel.categories = std::move(categories);
+          });
+    });
+  } else if (p->service.empty() || p->choosing) {
+    button(L"Path", 128, 0, 58, [p] {
+      auto value =
+          kalwer::winfiles::prompt(p->owner, L"Folder", p->directory.wstring());
+      if (value)
+        p->browse(*value);
+    });
+    button(L"Bookmark", 192, 0, 90, [p] {
+      auto it =
+          std::find(p->bookmarks.begin(), p->bookmarks.end(), p->directory);
+      if (it == p->bookmarks.end())
+        p->bookmarks.push_back(p->directory);
+      else
+        p->bookmarks.erase(it);
+      p->save_places();
+    });
+    button(L"Refresh", 288, 0, 76, [p] { p->browse(p->directory); });
+  } else if (p->service == "notes") {
+    button(L"Login", 128, 0, 65, [p] { p->notes_login(); });
+    button(L"New", 199, 0, 55, [p] {
+      auto value =
+          kalwer::winfiles::prompt(p->owner, L"New note", {}, false, true);
+      if (value && !value->empty()) {
+        SetWindowTextW(state.edit, (L"*note " + *value).c_str());
+        p->notes_fetch(
+            {"note", kalwer::winservices::utf8(*value), false, true});
+      }
+    });
+    button(L"Logout", 260, 0, 75, [p] { p->notes_fetch({"logout", ""}); });
+    button(L"Refresh", 341, 0, 85, [p] { p->notes_fetch(); });
+  } else {
+    button(L"Upload", 128, 0, 70, [p] {
+      if (!p->busy) {
+        p->shared_paths.clear();
+        p->service_query = p->query;
+        p->choosing = true;
+        p->browse({});
+      }
+    });
+    button(L"Text", 204, 0, 54, [p] {
+      if (p->busy)
+        return;
+      auto value = kalwer::winfiles::prompt(p->owner, L"Text", {}, false, true);
+      if (!value || value->empty())
+        return;
+      p->shared_paths.clear();
+      auto path = kalwer::winservices::data() / L"service-media" / L"text.txt";
+      kalwer::winservices::atomic_save(path, kalwer::winservices::utf8(*value));
+      p->selected = path;
+      p->choosing = p->review = true;
+    });
+    if (p->meme)
+      button(L"Key", 264, 0, 48, [p] { p->key(); });
+    button(L"Refresh", 318, 0, 76, [p] { p->fetch(); });
+  }
+  if (!p->service.empty() && !p->choosing && p->meme) {
+    button(wide(p->cat == "all" ? "All categories" : p->cat).c_str(), 0, 36,
+           230, [p] { p->category_menu(); });
+  } else if ((p->service.empty() || p->choosing) && !p->incoming) {
+    button(L"Bookmarks", 0, 36, 130, [p] { p->places_menu(); });
+    button(L"Home", 136, 36, 75,
+           [p] { p->browse(kalwer::winfiles::known(FOLDERID_Profile)); });
+    button(L"Downloads", 217, 36, 100,
+           [p] { p->browse(kalwer::winfiles::known(FOLDERID_Downloads)); });
+  }
+  text(p->service.empty() || p->choosing ? p->directory.wstring()
+                                         : wide(p->query),
+       0, 74);
+  auto image = [&](const std::shared_ptr<kalwer::winfiles::Bitmap> &bitmap,
+                   float x, float y, float w, float h) {
+    if (!bitmap || !bitmap->handle)
+      return;
+    using Cached =
+        std::pair<std::weak_ptr<kalwer::winfiles::Bitmap>, ComPtr<ID2D1Bitmap>>;
+    static std::map<const kalwer::winfiles::Bitmap *, Cached> cache;
+    static ID2D1DeviceContext *previous = nullptr;
+    if (previous != r.d2d_context.Get()) {
+      cache.clear();
+      previous = r.d2d_context.Get();
+    }
+    for (auto it = cache.begin(); it != cache.end();)
+      if (it->second.first.expired())
+        it = cache.erase(it);
+      else
+        ++it;
+    auto &cached = cache[bitmap.get()];
+    if (!cached.second) {
+      BITMAP info{};
+      if (!GetObjectW(bitmap->handle, sizeof(info), &info) ||
+          info.bmWidth <= 0 || info.bmHeight <= 0 ||
+          std::uint64_t(info.bmWidth) * info.bmHeight > 16000000)
+        return;
+      BITMAPINFO format{};
+      format.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+      format.bmiHeader.biWidth = info.bmWidth;
+      format.bmiHeader.biHeight = -info.bmHeight;
+      format.bmiHeader.biPlanes = 1;
+      format.bmiHeader.biBitCount = 32;
+      format.bmiHeader.biCompression = BI_RGB;
+      std::vector<unsigned char> bytes(size_t(info.bmWidth) * info.bmHeight *
+                                       4);
+      auto dc = CreateCompatibleDC(nullptr);
+      auto copied = GetDIBits(dc, bitmap->handle, 0, info.bmHeight,
+                              bytes.data(), &format, DIB_RGB_COLORS);
+      DeleteDC(dc);
+      if (copied != UINT(info.bmHeight))
+        return;
+      bool alpha = false;
+      for (size_t i = 3; i < bytes.size(); i += 4)
+        if (bytes[i]) {
+          alpha = true;
+          break;
+        }
+      auto properties = D2D1::BitmapProperties(D2D1::PixelFormat(
+          DXGI_FORMAT_B8G8R8A8_UNORM,
+          alpha ? D2D1_ALPHA_MODE_PREMULTIPLIED : D2D1_ALPHA_MODE_IGNORE));
+      if (FAILED(r.d2d_context->CreateBitmap(
+              D2D1::SizeU(info.bmWidth, info.bmHeight), bytes.data(),
+              info.bmWidth * 4, &properties, cached.second.GetAddressOf())))
+        return;
+      cached.first = bitmap;
+    }
+    auto pixels = cached.second;
+    auto size = pixels->GetSize();
+    float scale = std::min(w / size.width, h / size.height);
+    r.d2d_context->DrawBitmap(
+        pixels.Get(), D2D1::RectF(left + x + (w - size.width * scale) / 2,
+                                  top + y + (h - size.height * scale) / 2,
+                                  left + x + (w + size.width * scale) / 2,
+                                  top + y + (h + size.height * scale) / 2));
+  };
+  if (p->review) {
+    text(p->selected.filename().wstring(), 0, 120);
+    if (p->meme) {
+      button(L"Key", 220, 160, 75, [p] { p->key(); });
+      button(
+          wide(p->cat == "all"
+                   ? (p->categories.empty() ? "image" : p->categories.front())
+                   : p->cat)
+              .c_str(),
+          0, 160, 200, [p] { p->category_menu(); });
+    }
+    button(L"Upload", 0, 210, 120, [p] { p->upload(); });
+    button(L"Cancel", 130, 210, 120, [p] { p->back(); });
+  } else if (p->preview) {
+    if (p->preview_text.empty())
+      image(p->bitmaps[p->selected], 0, 110, 440, 280);
+    else {
+      ComPtr<IDWriteTextLayout> layout;
+      if (SUCCEEDED(r.write_factory->CreateTextLayout(
+              p->preview_text.c_str(), UINT32(p->preview_text.size()),
+              r.terminal_format.Get(), 440, 1000000, layout.GetAddressOf()))) {
+        layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        DWRITE_TEXT_METRICS metrics{};
+        layout->GetMetrics(&metrics);
+        p->text_lines = int(metrics.height / 16) + 1;
+        r.d2d_context->PushAxisAlignedClip(
+            D2D1::RectF(left, top + 110, left + 440, top + 390),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        set_brush(color(.72f, .94f, .79f));
+        r.d2d_context->DrawTextLayout(
+            D2D1::Point2F(left, top + 110 - p->text_scroll * 16), layout.Get(),
+            r.brush.Get());
+        r.d2d_context->PopAxisAlignedClip();
+      }
+    }
+    button(L"Copy", 0, 436, 90, [p] { p->copy_selected(); });
+    if (p->animation && !p->animation->data->limited)
+      button(p->animation->data->paused ? L"Play" : L"Pause", 200, 436, 90,
+             [p] { p->animation->data->paused = !p->animation->data->paused; });
+    if (p->video) {
+      auto scale = state.render.scale;
+      p->video->place(int((left - kLogicalWidth) * scale),
+                      int((top + 110) * scale), int(440 * scale),
+                      int(280 * scale));
+      button(p->video->state->wanted ? L"Pause" : L"Play", 200, 436, 90,
+             [p] { p->video->toggle(); });
+      if (p->video->state->failed)
+        p->message = "Preview unavailable. Use Open.";
+    }
+    button(L"Open", 100, 436, 90, [p] {
+      ShellExecuteW(p->owner, L"open",
+                    p->service == "notes" ? L"https://notes.aridlin.pl"
+                                          : p->selected.c_str(),
+                    nullptr, nullptr, SW_SHOWNORMAL);
+    });
+    text(p->selected.filename().wstring(), 0, 400);
+  } else
+    for (int index = p->scroll;
+         index < std::min<int>(p->scroll + 12, p->visible.size()); index++) {
+      auto &e = p->entries[p->visible[index]];
+      float x = float((index - p->scroll) % 4) * 110,
+            y = 112 + float((index - p->scroll) / 4) * 108;
+      if (index == p->selection)
+        fill_round(left + x, top + y, left + x + 106, top + y + 104, 4,
+                   color(.07f, .31f, .18f, .9f));
+      p->get_image(e);
+      if (p->bitmaps.contains(e.path) && p->bitmaps[e.path])
+        image(p->bitmaps[e.path], x + 4, y + 3, 98, 70);
+      else {
+        if (e.folder) {
+          fill_round(left + x + 28, top + y + 22, left + x + 58, top + y + 32,
+                     2, color(.2f, .6f, .37f));
+          fill_round(left + x + 28, top + y + 28, left + x + 78, top + y + 60,
+                     3, color(.2f, .6f, .37f));
+        } else {
+          fill_round(left + x + 36, top + y + 17, left + x + 70, top + y + 62,
+                     2, color(.16f, .34f, .24f));
+          for (int line = 0; line < 3; line++)
+            fill_round(left + x + 42, top + y + 28 + line * 8, left + x + 64,
+                       top + y + 30 + line * 8, 1, color(.48f, .79f, .6f));
+        }
+      }
+      text(e.name, x + 4, y + 74, 100);
+    }
+  text(wide(p->message), 0, 478);
+}
+
 void draw_command_popup() {
     if (!state.popup_open) return;
     auto& render = state.render;
@@ -2835,7 +3254,7 @@ void draw_command_popup() {
     constexpr float panel_left = kLogicalWidth + 28.0f;
     constexpr float panel_right = kExpandedLogicalWidth - 10.0f;
     constexpr float panel_top = 44.0f;
-    const float panel_bottom = state.popup_game ? 612.0f : 472.0f;
+    const float panel_bottom = detached_popup() ? 612.0f : 472.0f;
     const float elapsed = popup_elapsed_ms();
     auto eased = [](float value) {
         value = std::clamp(value, 0.0f, 1.0f);
@@ -2856,7 +3275,7 @@ void draw_command_popup() {
     if (unfold <= 0.0f) return;
 
     const float current_bottom = panel_top + (panel_bottom - panel_top) * unfold;
-    set_brush(color(0.0f, 0.075f, 0.043f, state.popup_game?.08f:.985f));
+    set_brush(color(0.0f, 0.075f, 0.043f, detached_popup()?.08f:.985f));
     render.d2d_context->FillRectangle(
         D2D1::RectF(panel_left, panel_top, panel_right, current_bottom), render.brush.Get());
     if(state.popup_game){
@@ -2880,10 +3299,10 @@ void draw_command_popup() {
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
     draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
-    const std::wstring status = state.popup_game ? std::to_wstring(kalwer::wallet.balance)+L" koins" : state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
+    const std::wstring status = state.popup_game ? std::to_wstring(kalwer::wallet.balance)+L" koins" : state.popup_browser||state.popup_fred?L"":state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
     draw_text(status, render.tiny_format.Get(), panel_left + 246, panel_top + 10,
               state.popup_game?panel_right-50:panel_left+315, panel_top + 30, color(0.46f, 0.82f, 0.57f));
-    if (!state.popup_game) draw_popup_button(L"COPY", PopupButton::copy,
+    if (!state.popup_game&&!state.popup_fred) draw_popup_button(L"COPY", PopupButton::copy,
                       panel_right - 142, panel_right - 92, panel_top + 6);
     if (elevated_command.empty() && state.popup_job) draw_popup_button(L"BG", PopupButton::background,
                       panel_right - 86, panel_right - 49, panel_top + 6);
@@ -2893,6 +3312,13 @@ void draw_command_popup() {
     render.d2d_context->DrawLine(D2D1::Point2F(panel_left + 10, panel_top + 39),
                                   D2D1::Point2F(panel_right - 10, panel_top + 39),
                                   render.brush.Get(), 1.0f);
+    if(state.popup_fred){
+        auto p=state.popup_fred;
+        if(p->game){ComPtr<ID2D1Bitmap> image;auto properties=D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_IGNORE));if(SUCCEEDED(render.d2d_context->CreateBitmap(D2D1::SizeU(256,192),p->api->pixels(p->game),256*4,&properties,image.GetAddressOf())))render.d2d_context->DrawBitmap(image.Get(),D2D1::RectF(panel_left+12,124,panel_right-12,460),1,D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);}
+        else draw_text(wide(p->error),render.tiny_format.Get(),panel_left+14,100,panel_right-14,420,color(.8f,.93f,.83f));
+        render.d2d_context->SetTransform(transform);render.d2d_context->PopAxisAlignedClip();return;
+    }
+    if(state.popup_browser){draw_file_panel(panel_left+12,94);render.d2d_context->SetTransform(transform);render.d2d_context->PopAxisAlignedClip();return;}
     if (state.popup_game) {
         auto game_transform = D2D1::Matrix3x2F::Translation(0,-38) *
             D2D1::Matrix3x2F::Scale(448.f/420,506.f/452) *
@@ -2983,12 +3409,12 @@ HRESULT render_frame() {
     render.d2d_context->Clear(color(0, 0, 0, 0));
     render.d2d_context->SetTransform(D2D1::Matrix3x2F::Translation(0, static_cast<float>(update_banner.offset())) *
                                      D2D1::Matrix3x2F::Scale(render.scale, render.scale));
-    if (state.popup_game) {
+    if (detached_popup()) {
         render.d2d_context->SetTransform(D2D1::Matrix3x2F::Translation(-kLogicalWidth,0)*D2D1::Matrix3x2F::Scale(render.scale,render.scale));
     } else { draw_search(); draw_results(); }
     draw_command_popup();
     render.d2d_context->SetTransform(D2D1::Matrix3x2F::Scale(render.scale, render.scale));
-    if (update_banner.visible() && !state.popup_game) {
+    if (update_banner.visible() && !detached_popup()) {
         fill_round(15, 5, 635, 33, 6, color(0.04f, 0.22f, 0.12f, 0.98f));
         draw_text(std::wstring(L"Updated to v") + kKalwerVersion, render.title_format.Get(),
                   29, 9, 620, 31, color(0.68f, 0.94f, 0.76f));
@@ -3009,7 +3435,7 @@ HRESULT render_frame() {
     static kalwer::WindowsDither dither;
     auto backdrop=kalwer::live_backdrop.copy();
     bool backdrop_ready=!state.opening && !state.closing && now-state.opened_at>=std::chrono::milliseconds(950);
-    bool has_backdrop=backdrop_ready && dither.update(render.d3d.Get(),render.d3d_context.Get(),backdrop,state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode);
+    bool has_backdrop=backdrop_ready && dither.update(render.d3d.Get(),render.d3d_context.Get(),backdrop,detached_popup()?kalwer::appearance.popup_mode:kalwer::appearance.mode);
     ID3D11ShaderResourceView* backdrop_view=has_backdrop?dither.view.Get():nullptr;
     render.d3d_context->PSSetShaderResources(1,1,&backdrop_view);
     ID3D11ShaderResourceView* view = render.ui_view.Get();
@@ -3030,14 +3456,14 @@ HRESULT render_frame() {
         float padding[2];
         float theme_accent[4];
     } parameters{
-        static_cast<float>(state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
+        static_cast<float>(detached_popup() ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
         opening,
         results_y() + result_slide() + update_banner.offset() + (state.selection_visual - state.scroll_visual) * kRowPitch,
-        state.results.empty() || state.popup_game ? 0 : 1,
+        state.results.empty() || detached_popup() ? 0 : 1,
         state.closing ? 1 : 0,
-        {has_backdrop?float(state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode)+(kalwer::appearance.bw?10.f:0.f):0.f,state.popup_game?kalwer::appearance.opacity/100.f:0.f},
-        {((kalwer::themes[kalwer::appearance.theme].accent>>16)&255)/255.f,((kalwer::themes[kalwer::appearance.theme].accent>>8)&255)/255.f,(kalwer::themes[kalwer::appearance.theme].accent&255)/255.f,kalwer::appearance.keep_halftone?1.f:0.f},
+        {has_backdrop?float(detached_popup()?kalwer::appearance.popup_mode:kalwer::appearance.mode)+(kalwer::appearance.bw?10.f:0.f):0.f,detached_popup()?kalwer::appearance.opacity/100.f:0.f},
+        {((kalwer::themes[kalwer::appearance.theme].accent>>16)&255)/255.f,((kalwer::themes[kalwer::appearance.theme].accent>>8)&255)/255.f,(kalwer::themes[kalwer::appearance.theme].accent&255)/255.f,(detached_popup()?kalwer::appearance.popup_keep_halftone:kalwer::appearance.keep_halftone)?1.f:0.f},
     };
     std::memcpy(mapped.pData, &parameters, sizeof(parameters));
     render.d3d_context->Unmap(render.constants.Get(), 0);
@@ -3049,7 +3475,7 @@ HRESULT render_frame() {
     render.d3d_context->PSSetShaderResources(1, 1, &null_view);
     result = render.swap_chain->Present(1, 0);
     const bool popup_animating = state.popup_closing || (state.popup_open && popup_animation_progress() < 0.999f);
-    state.render_dirty = state.opening || state.closing || popup_animating ||
+    state.render_dirty = state.opening || state.closing || popup_animating || (state.popup_browser&&state.popup_browser->animating) ||
                          (!state.popup_open && now-state.results_arrived<std::chrono::milliseconds(160)) ||
                          std::abs(target_selection - state.selection_visual) > 0.01f ||
                          std::abs(target_scroll - state.scroll_visual) > 0.01f;
@@ -3070,7 +3496,7 @@ HRESULT position_and_resize() {
     information.cbSize = sizeof(information);
     GetMonitorInfoW(monitor, &information);
     const float scale = monitor_scale(monitor);
-    const int logical_width = state.popup_game ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth;
+    const int logical_width = detached_popup() ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth;
     const int width = static_cast<int>(std::lround(logical_width * scale));
     const int height = static_cast<int>(std::lround(kLogicalHeight * scale));
     const int launcher_width = static_cast<int>(std::lround(kLogicalWidth * scale));
@@ -3082,7 +3508,7 @@ HRESULT position_and_resize() {
         std::min(centered, work_right - width - 8));
     const int y = information.rcWork.top +
                   ((information.rcWork.bottom - information.rcWork.top) - height) / 3;
-    SetWindowPos(state.window, HWND_TOPMOST, state.popup_game ? work_right-width-8 : x, state.popup_game ? information.rcWork.top+8 : y, width, height,
+    SetWindowPos(state.window, HWND_TOPMOST, detached_popup() ? work_right-width-8 : x, detached_popup() ? information.rcWork.top+8 : y, width, height,
                  SWP_NOOWNERZORDER | SWP_NOACTIVATE);
     if (state.render.pixel_width != static_cast<UINT>(width) ||
         state.render.pixel_height != static_cast<UINT>(height)) {
@@ -3263,6 +3689,16 @@ void open_multiline_editor(bool terminal=false) {
 
 LRESULT CALLBACK edit_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (state.popup_closing && (message == WM_KEYDOWN || message == WM_CHAR || message == WM_PASTE)) return 0;
+    if(state.popup_fred){
+        if(message==WM_KEYDOWN&&wparam==VK_ESCAPE)close_popup(false,false);
+        else if(message==WM_KEYDOWN||message==WM_KEYUP){state.popup_fred->key(UINT(wparam),message==WM_KEYDOWN);state.render_dirty=true;}
+        if(message==WM_KEYDOWN||message==WM_KEYUP||message==WM_CHAR||message==WM_PASTE)return 0;
+    }
+    if(state.popup_browser){
+        if(message==WM_SYSKEYDOWN&&wparam==VK_RETURN)return 0;
+        if(message==WM_KEYDOWN){state.popup_browser->keydown(UINT(wparam),(GetKeyState(VK_CONTROL)&0x8000)!=0);state.render_dirty=true;}
+        if(message==WM_KEYDOWN||message==WM_CHAR||message==WM_PASTE||message==WM_CUT||message==WM_CLEAR)return 0;
+    }
     if (state.popup_game) {
         if(message==WM_KEYUP){int k=wparam==VK_LEFT?1:wparam==VK_RIGHT?2:wparam==VK_UP?3:wparam==VK_DOWN?4:wparam>='A' && wparam<='Z'?int(wparam-'A'+'a'):int(wparam);state.popup_game->release(k);return 0;}
         if (message == WM_KEYDOWN) {
@@ -3413,6 +3849,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         }
         case WM_CTLCOLOREDIT:
             return reinterpret_cast<LRESULT>(inline_input_brush(reinterpret_cast<HDC>(wparam)));
+        case WM_COPYDATA: {
+            auto data=reinterpret_cast<COPYDATASTRUCT*>(lparam);
+            if(!elevated_command.empty()||!data||data->dwData!=0x4b534852||!data->lpData||data->cbData>65536)return FALSE;
+            try{auto rows=kalwer::winservices::Json::parse(std::string(static_cast<char*>(data->lpData),data->cbData));if(!rows.is_array()||rows.empty()||rows.size()>16)return FALSE;std::vector<std::filesystem::path> files;for(auto&row:rows){auto path=std::filesystem::path(wide(row.get<std::string>()));if(!std::filesystem::is_regular_file(path))return FALSE;files.push_back(path);}show_shared_files(files);return TRUE;}catch(...){return FALSE;}
+        }
         case WM_COMMAND:
             if (LOWORD(wparam) == 100 && HIWORD(wparam) == EN_CHANGE) {
                 state.last_input_at = std::chrono::steady_clock::now();
@@ -3429,7 +3870,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     PostMessageW(admin, kCloseAdminPopupMessage, 0, 0);
                     return 0;
                 }
-                if (state.popup_open) close_popup(false, true);
+                if(state.popup_browser)state.popup_browser->keydown(VK_ESCAPE,false);else if (state.popup_open) close_popup(false, true);
                 else if (state.visible) hide_launcher();
                 else show_launcher();
             }
@@ -3440,14 +3881,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         case kToggleMessage:
             if (state.settings_window) { SetForegroundWindow(state.settings_window); return 0; }
                 if (state.popup_game) { SetForegroundWindow(state.window); return 0; }
-            if (state.popup_open) close_popup(false, true);
+            if(state.popup_browser)state.popup_browser->keydown(VK_ESCAPE,false);else if (state.popup_open) close_popup(false, true);
             else if (state.visible) hide_launcher();
             else show_launcher();
             return 0;
         case WM_TIMER: {
             static auto backdrop_last=std::chrono::steady_clock::now();
             if(std::chrono::steady_clock::now()-backdrop_last>std::chrono::milliseconds(160)) {
-                int mode=state.popup_game?kalwer::appearance.popup_mode:kalwer::appearance.mode;
+                int mode=detached_popup()?kalwer::appearance.popup_mode:kalwer::appearance.mode;
                 bool settled=!state.opening && !state.closing && std::chrono::steady_clock::now()-state.opened_at>=std::chrono::milliseconds(950);
                 bool capture=state.visible && settled && mode>0 && SetWindowDisplayAffinity(state.window,0x11);
                 if(!mode)SetWindowDisplayAffinity(state.window,0);
@@ -3465,6 +3906,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (state.popup_closing && popup_elapsed_ms() <= 0) {
                 state.popup_open = false; state.popup_closing = false;
                 state.popup_job = nullptr; state.popup_document.reset();
+                if(state.popup_fred){state.popup_fred.reset();finish_hide_launcher();position_and_resize();return 0;}
+                if(state.popup_browser){bool notes=state.popup_browser->service=="notes";state.popup_browser.reset();position_and_resize();if(notes){state.restored_query=window_text(state.edit);state.hidden_at=std::chrono::steady_clock::now();show_launcher();}else finish_hide_launcher();return 0;}
                 if (state.popup_game) { state.popup_game.reset(); finish_hide_launcher(); position_and_resize(); return 0; }
                 position_and_resize(); hide_launcher();
             }
@@ -3489,6 +3932,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 accept_results(std::move(reply->value));
                 if(std::exchange(state.pending_activate,false)) activate_selection(state.pending_elevated);
             }
+            if(state.popup_fred&&state.popup_fred->tick())state.render_dirty=true;
+            if(state.popup_browser&&state.popup_browser->poll())state.render_dirty=true;
             poll_files();
             poll_icons();
             if (state.icons_deferred) {
@@ -3524,6 +3969,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         }
         case WM_MOUSEWHEEL:
+            if(state.popup_browser){state.popup_browser->wheel(GET_WHEEL_DELTA_WPARAM(wparam));state.render_dirty=true;return 0;}
             if (state.popup_document) {
                 if (GET_WHEEL_DELTA_WPARAM(wparam) < 0) state.popup_document_scroll += 3;
                 else state.popup_document_scroll -= std::min<size_t>(3, state.popup_document_scroll);
@@ -3541,13 +3987,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         case WM_MOUSEMOVE: {
             if (!state.visible) break;
             const float scale = state.render.scale;
-            const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
-            const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
+            const float logical_x = GET_X_LPARAM(lparam) / scale + (detached_popup() ? kLogicalWidth : 0);
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - (detached_popup() ? 0 : update_banner.offset());
             TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
             TrackMouseEvent(&tracking);
             if (state.popup_game && !state.popup_closing) {
                 state.popup_game->pointer((logical_x-kLogicalWidth-40)*420/448.,38+(logical_y-94)*452/506.,0);
                 state.render_dirty=true;
+            }
+            if(state.popup_browser){auto previous=state.popup_browser->hovered;state.popup_browser->hover(logical_x-kLogicalWidth-40,logical_y-94);if(previous!=state.popup_browser->hovered)state.render_dirty=true;}
+            if(state.popup_browser&&browser_drag_pending&&(wparam&MK_LBUTTON)){
+                if(std::abs(GET_X_LPARAM(lparam)-browser_drag_origin.x)>GetSystemMetrics(SM_CXDRAG)||std::abs(GET_Y_LPARAM(lparam)-browser_drag_origin.y)>GetSystemMetrics(SM_CYDRAG)){
+                    browser_drag_pending=false;
+auto p=state.popup_browser;auto path=p->preview?p->selected:p->visible.empty()?std::filesystem::path{}:p->entries[p->visible[p->selection]].path;
+                    if(!path.empty()&&std::filesystem::is_regular_file(path))kalwer::winfiles::drag(path);return 0;
+                }
             }
             if (state.search_selecting) {
                 const DWORD index = search_text_index_at(logical_x, logical_y);
@@ -3590,11 +4044,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 state.render_dirty = true;
             }
             return 0;
+        case WM_LBUTTONDBLCLK:
+            if(state.popup_browser&&!state.popup_closing&&!state.popup_browser->preview&&!state.popup_browser->review&&GET_Y_LPARAM(lparam)/state.render.scale>=206){state.popup_browser->open_index();state.render_dirty=true;return 0;}break;
         case WM_LBUTTONDOWN: {
             SetFocus(state.edit);
             const float scale = state.render.scale;
-            const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
-            const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
+            const float logical_x = GET_X_LPARAM(lparam) / scale + (detached_popup() ? kLogicalWidth : 0);
+            const float logical_y = GET_Y_LPARAM(lparam) / scale - (detached_popup() ? 0 : update_banner.offset());
+            if(state.popup_browser&&!state.popup_closing&&logical_y>=94){
+                auto p=state.popup_browser;p->click(logical_x-kLogicalWidth-40,logical_y-94,false);browser_drag_origin={GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)};browser_drag_pending=logical_y>=206;if(p->pressed>=0)SetCapture(window);state.render_dirty=true;return 0;
+            }
             if (state.popup_game && !state.popup_closing && logical_y>=94) {
                 state.popup_game->pointer((logical_x-kLogicalWidth-40)*420/448.,38+(logical_y-94)*452/506.,1);
                 state.render_dirty=true; return 0;
@@ -3644,6 +4103,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         }
         case WM_LBUTTONUP: {
+            browser_drag_pending=false;
+            if(state.popup_browser&&state.popup_browser->pressed>=0){auto p=state.popup_browser;ReleaseCapture();p->release(GET_X_LPARAM(lparam)/state.render.scale-40,GET_Y_LPARAM(lparam)/state.render.scale-94);state.render_dirty=true;return 0;}
             if (state.search_selecting || state.popup_selecting) {
                 state.search_selecting = false;
                 state.popup_selecting = false;
@@ -3653,17 +4114,17 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             if (state.popup_pressed != PopupButton::none) {
                 const float scale = state.render.scale;
-                const float logical_x = GET_X_LPARAM(lparam) / scale + (state.popup_game ? kLogicalWidth : 0);
-                const float logical_y = GET_Y_LPARAM(lparam) / scale - (state.popup_game ? 0 : update_banner.offset());
+                const float logical_x = GET_X_LPARAM(lparam) / scale + (detached_popup() ? kLogicalWidth : 0);
+                const float logical_y = GET_Y_LPARAM(lparam) / scale - (detached_popup() ? 0 : update_banner.offset());
                 const PopupButton pressed = state.popup_pressed;
                 const PopupButton released = popup_button_at(logical_x, logical_y);
                 state.popup_pressed = PopupButton::none;
                 ReleaseCapture();
                 state.render_dirty = true;
                 if (pressed == released) {
-                    if (pressed == PopupButton::copy) copy_job_output();
+                    if (pressed == PopupButton::copy) {if(state.popup_browser)state.popup_browser->copy_selected();else copy_job_output();}
                     else if (pressed == PopupButton::background) close_popup(true, false);
-                    else if (pressed == PopupButton::close) close_popup(false, true);
+                    else if (pressed == PopupButton::close) {if(state.popup_browser&&(state.popup_browser->preview||state.popup_browser->review||state.popup_browser->choosing))state.popup_browser->back();else close_popup(false,true);}
                 }
                 return 0;
             }
@@ -3675,12 +4136,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         case WM_KEYDOWN:
             // Escape still closes if Windows temporarily focuses the parent.
             if (wparam == VK_ESCAPE) {
-                if (state.popup_open) close_popup(false, true);
+                if(state.popup_browser)state.popup_browser->keydown(VK_ESCAPE,false);else if (state.popup_open) close_popup(false, true);
                 else hide_launcher();
                 return 0;
             }
             break;
         case WM_ACTIVATE:
+            if(state.popup_browser)state.render_dirty=true;
+            if(state.popup_browser&&LOWORD(wparam)==WA_INACTIVE){if(state.popup_browser->video)state.popup_browser->video->pause();if(state.popup_browser->animation)state.popup_browser->animation->data->paused=true;}
+            if(state.popup_fred)state.popup_fred->focus(LOWORD(wparam)!=WA_INACTIVE&&!state.popup_closing);
             if (state.popup_game) {
                 state.popup_game->focus(LOWORD(wparam) != WA_INACTIVE && !state.popup_closing);
                 state.game_last=std::chrono::steady_clock::now(); state.render_dirty=true;
@@ -3701,6 +4165,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             return 0;
         }
         case WM_DESTROY:
+            if(state.popup_browser)state.popup_browser->shutdown();
+            if(state.popup_fred)state.popup_fred->focus(false);
             if(multiline_window) DestroyWindow(multiline_window);
             if(state.settings_window) DestroyWindow(state.settings_window);
             if (state.hotkey_registered) UnregisterHotKey(window, kHotkeyId);
@@ -3719,12 +4185,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
     if (arguments && argument_count == 3 && std::wcscmp(arguments[1], L"--admin-command") == 0)
         elevated_command = arguments[2];
+    if(arguments&&argument_count>18&&std::wcscmp(arguments[1],L"--share")==0){LocalFree(arguments);MessageBoxW(nullptr,L"Choose at most 16 files.",L"Kalwer",MB_OK|MB_ICONINFORMATION);return 1;}
+    if(arguments&&argument_count>2&&std::wcscmp(arguments[1],L"--share")==0){for(int i=2;i<argument_count&&startup_shared_files.size()<16;i++){std::error_code ec;std::filesystem::path path=arguments[i];if(std::filesystem::is_regular_file(path,ec))startup_shared_files.push_back(path);}}
     if (arguments) LocalFree(arguments);
     if (elevated_command.empty() && handle_update_bootstrap()) return 0;
-    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 1;
+    if (FAILED(OleInitialize(nullptr))) return 1;
     state.instance = instance;
     if (elevated_command.empty()) state.mutex = CreateMutexW(nullptr, FALSE, L"Local\\KalwerWindowsResident-v1");
     if (state.mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        if(!startup_shared_files.empty()){auto window=FindWindowW(kWindowClass,kWindowTitle);kalwer::winservices::Json rows=kalwer::winservices::Json::array();for(auto&path:startup_shared_files)rows.push_back(utf8(path.wstring()));auto body=rows.dump();COPYDATASTRUCT data{0x4b534852,DWORD(body.size()),body.data()};DWORD_PTR reply=0;if(window)SendMessageTimeoutW(window,WM_COPYDATA,0,reinterpret_cast<LPARAM>(&data),SMTO_ABORTIFHUNG,3000,&reply);CloseHandle(state.mutex);CoUninitialize();return reply?0:1;}
+
         if (HWND existing = FindWindowW(kWindowClass, kWindowTitle)) {
             PostMessageW(existing, kToggleMessage, 0, 0);
         }
@@ -3735,7 +4205,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
-    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     window_class.lpfnWndProc = window_proc;
     window_class.hInstance = instance;
     window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
@@ -3794,6 +4264,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     SetTimer(state.window, kTimerId + 1, 3600000, nullptr);
     }
 
+    if(elevated_command.empty())install_send_to();
+    if(!startup_shared_files.empty())show_shared_files(startup_shared_files);
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         if(state.settings_window && IsDialogMessageW(state.settings_window,&message)) continue;

@@ -4,6 +4,9 @@
 #undef wWinMain
 #include <cassert>
 #include <iostream>
+#define main kalwer_windows_feature_cases
+#include "windows_features_test.cpp"
+#undef main
 int main() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     assert(SUCCEEDED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)));
@@ -89,6 +92,7 @@ int main() {
     CloseHandle(blocked->input_write);CloseHandle(blocked->output_read);CloseHandle(blocked->process_thread);CloseHandle(blocked->process);blocked.reset();
     app_search.stop();icon_worker.stop();
     std::filesystem::remove_all(directory);
+    assert(kalwer_windows_feature_cases()==0);
     CoUninitialize();
     std::cout<<"Settings popup layout at 100/150/200 percent, singleton, checkbox and numeric input, close, and 20k-app latest-query search passed.\n";
 }

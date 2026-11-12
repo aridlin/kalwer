@@ -24,10 +24,14 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    // Reuse the installed APK's key locally; let AGP create its default key on clean CI.
-    def existingDebugKey = file(System.getProperty("user.home") + "/.android/debug.keystore")
-    if (existingDebugKey.exists()) {
-        signingConfigs { debug { storeFile existingDebugKey } }
+    // Local releases keep a dedicated private key; CI debug keys are never published.
+    def configuredKey = System.getenv('KALWER_ANDROID_KEYSTORE')
+    def dedicatedKey = file(System.getProperty('user.home') + '/.local/share/kalwer/android-signing/debug.keystore')
+    def sharedDebugKey = file(System.getProperty('user.home') + '/.android/debug.keystore')
+    def selectedKey = configuredKey ? file(configuredKey) : (dedicatedKey.exists() ? dedicatedKey : sharedDebugKey)
+    if (configuredKey && !selectedKey.exists()) throw new GradleException('KALWER_ANDROID_KEYSTORE does not exist')
+    if (selectedKey.exists()) {
+        signingConfigs { debug { storeFile selectedKey } }
     }
     buildTypes {
         release { minifyEnabled false }

@@ -595,3 +595,31 @@ installed GStreamer codecs (`gst-plugins-good` and `gst-libav` on Arch). Android
 text through the system Share menu, with a Binup/Memes destination and upload review.
 Import the private Memes key once through **Key → Import file** on Android; it is
 stored using Android Keystore and is never included in the APK.
+
+## Windows feature parity (0.13.2)
+
+Windows now supports `/file [path]`, `/memes`, `/binup`, notes commands beginning
+with `*`, and app groups (`&name`, `&manage` or `/categories`) in its native host.
+File and service popups use Kalwer's existing animated Direct2D frame, popup
+appearance settings and right-edge placement. Downloads mixes files and folders
+newest first. Other folders keep folders first. Thumbnail work is limited to two
+workers for visible tiles, with a bounded cache.
+
+Enter previews; Escape or × returns to the gallery; Ctrl+C or Copy copies a real
+Windows file, and files can be dragged into other applications. Image, GIF, text
+and native Media Foundation video/audio previews are supported; Open uses the
+registered Windows application for other formats. Media playback pauses on focus
+loss and stops on leaving the preview.
+
+Explorer's **Send to → Kalwer** offers Binup or Memes and an upload review; it
+never uploads merely by receiving a file. The shortcut is registered in the
+current user's Send to folder. `kalwer.exe --share FILE [FILE…]` accepts up to 16
+files. Binup appends to the current paste. Memes requires a one-time private-key
+setup; Windows DPAPI protects its saved key. Notes use the same account as
+notes.aridlin.pl, with an encrypted session and confirmed saves.
+
+Windows app groups support automatic discovery, explicit selection and manual
+ordering. `&favorites` and `&favourites` show saved favorites. Windows retains
+Everything search, Windows application activation and native administrator
+elevation. Fred remains an optional local module built with your own reference;
+external desktop companions such as MALCIP retain their own installation requirements.

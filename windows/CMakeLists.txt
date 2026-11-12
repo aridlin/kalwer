@@ -5,10 +5,14 @@ add_executable(kalwer-windows WIN32 kalwer_windows.cpp kalwer.rc)
 set_target_properties(kalwer-windows PROPERTIES OUTPUT_NAME kalwer)
 target_compile_features(kalwer-windows PRIVATE cxx_std_20)
 target_compile_definitions(kalwer-windows PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(kalwer-windows PRIVATE -Wall -Wextra -Wpedantic)
+if(MSVC)
+    target_compile_options(kalwer-windows PRIVATE /W4 /utf-8 /EHsc)
+else()
+    target_compile_options(kalwer-windows PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 target_link_libraries(kalwer-windows PRIVATE
     d3d11 d3dcompiler dxgi dcomp d2d1 dwrite windowscodecs
-    dwmapi shell32 shlwapi shcore ole32 user32 gdi32 advapi32 winhttp bcrypt)
+    dwmapi shell32 shlwapi shcore ole32 user32 gdi32 advapi32 winhttp bcrypt uuid mfplat mf mfuuid evr gdiplus)
 
 if(MINGW)
     target_link_options(kalwer-windows PRIVATE -municode -static)

@@ -35,3 +35,9 @@ Audio libraries are linked only into the separate GPL Koom helper.
 Python's `unicodedata` database. See `vendor/unicode/LICENSE.txt` for the Unicode
 License V3. Regenerate using `python tools/generate_unicode.py` with a Python
 installation whose Unicode database is version 16.0.0.
+
+## JSON for Modern C++
+
+The Windows service clients use nlohmann/json 3.11.3, Copyright (c) 2013–2023
+Niels Lohmann, licensed under the MIT License. The pinned single header and
+license are in `vendor/json/`.

@@ -28,3 +28,9 @@ Hyprland toplevel export protocol
     OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   
+
+## JSON for Modern C++
+
+The Windows service clients use nlohmann/json 3.11.3, Copyright (c) 2013–2023
+Niels Lohmann, licensed under the MIT License. The pinned single header and
+license are in `vendor/json/`.

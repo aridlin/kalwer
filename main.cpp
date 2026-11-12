@@ -69,9 +69,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.1+local.1";
+constexpr const char* kKalwerVersion = "0.13.2+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.1";
+constexpr const char* kKalwerVersion = "0.13.2";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";

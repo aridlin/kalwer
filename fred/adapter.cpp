@@ -62,4 +62,9 @@ const uint32_t *pixels(void *p) {
 }
 const KalwerFredApi api = {1, create, destroy, step, pixels};
 } // namespace
-extern "C" const KalwerFredApi *kalwer_fred_api() { return &api; }
+#ifdef _WIN32
+#define KALWER_FRED_EXPORT __declspec(dllexport)
+#else
+#define KALWER_FRED_EXPORT
+#endif
+extern "C" KALWER_FRED_EXPORT const KalwerFredApi *kalwer_fred_api() { return &api; }

@@ -195,3 +195,10 @@ to Kalwer from another app, choose Binup or Memes, and confirm Upload. Binup
 appends to the current paste. Memes uses a private upload key: import it once
 with Key → Import file. Android Keystore protects the saved key; no key is
 packaged in the APK. Downloaded previews share read-only content URIs.
+
+Android 0.5.0 uses a new signing certificate because the original 0.4.1 private
+key could not be recovered. Installing it over the old public APK is not possible;
+uninstalling the old app clears its local settings and game data. The release
+build now keeps a dedicated private Kalwer signing key outside the repository
+so future updates retain the same certificate. CI-generated debug APKs are not
+used as release assets. `KALWER_ANDROID_KEYSTORE` can select an existing key.

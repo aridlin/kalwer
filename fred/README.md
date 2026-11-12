@@ -1,4 +1,4 @@
-# Fred native popup (Linux)
+# Fred native popup
 
 `/fred` opens a 550 × 486 logical-pixel popup, with Fred's original 256 × 192
 framebuffer displayed at 2× using nearest-neighbour scaling. It ejects from the
@@ -30,3 +30,9 @@ hash in that revision without relaxing checks on original/generated game data.
 **Do not distribute the generated module, build directories, or original assets.**
 Normal Kalwer builds and releases contain only the adapter interface. Without a
 locally installed module `/fred` explains how to set it up.
+
+On Windows, `/fred` uses the same optional module API, controls and focus pause.
+After the verified native build above, add `--windows` on a Linux build host
+with MinGW to also produce `build-fred/kalwer-fred.dll`. Copy that private DLL
+to `%LOCALAPPDATA%\Kalwer\fred\kalwer-fred.dll` on your own Windows machine.
+The generated DLL contains private game data and must not be included in releases.
