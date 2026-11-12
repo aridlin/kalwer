@@ -3,6 +3,7 @@
 1 ICON "../assets/kalwer.ico"
 
 103 RCDATA "../vendor/everything/SDK-LICENSE.txt"
+104 RCDATA "../vendor/json/LICENSE.MIT"
 
 1 VERSIONINFO
 FILEVERSION 0,13,2,0
