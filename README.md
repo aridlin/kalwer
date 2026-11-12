@@ -14,6 +14,7 @@ comes from the finished launcher below it.
 ## Features
 
 - Native Unicode lookup (`+200b`, `+zero`), emoticon search (`/wemote`), and SSH host search (`/wssh`).
+- Linux `/file [path]`: opens Downloads in Kalwer’s terminal popup with a thumbnail browser sorted by modification date (newest first, folders first), file previews, drag/copy attachments, and saved folder bookmarks. Enter opens a selection; Escape or × returns from preview. Typing searches filenames; Ctrl+F focuses search and Ctrl+L edits the path. Images and cached desktop thumbnails are shown; text previews show the first 64 KiB.
 - System-wide `:` file search through Everything on Windows and plocate on Linux.
 - GPU-backed, animated halftone coverage over the fully rendered interface.
 - Scrollable Elephant application search with persistent, unlimited favourites

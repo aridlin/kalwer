@@ -17,6 +17,7 @@ inline constexpr std::array commands = {
     Command{"/breakout", "Paddle, ball and three brick boards", ""},
     Command{"/kar", "Native arcade phone racing", ""},
 #ifdef __linux__
+    Command{"/file", "Browse files with thumbnails, preview and bookmarks: /file [path]", ""},
     Command{"/fred", "Fred: native Spectrum port in a larger popup", ""},
 #endif
     Command{"/koom", "Doom-compatible Freedoom player", ""},
@@ -53,7 +54,7 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     if(prefix=="/unlockall"){matches.push_back(&unlock);return matches;}
     if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
-        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {
+        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/file" || command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {
             if(command.name==prefix)matches.insert(matches.begin(),&command);
             else matches.push_back(&command);
         }

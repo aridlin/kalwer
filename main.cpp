@@ -1,3 +1,4 @@
+#include "file_browser_gtk.hpp"
 #include "release_selection.hpp"
 #include "multiline_gtk.hpp"
 #include "popup_placement.hpp"
@@ -67,9 +68,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.12.0+local.1";
+constexpr const char* kKalwerVersion = "0.13.0+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.12.0";
+constexpr const char* kKalwerVersion = "0.13.0";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -156,6 +157,7 @@ struct State {
     GtkWidget* output_game = nullptr;
     GtkWidget* output_fred = nullptr;
     bool output_updates = false;
+    bool output_files = false;
     GtkWidget* output_status = nullptr;
     guint output_animation_source = 0;
     guint output_close_source = 0;
@@ -434,7 +436,7 @@ std::atomic<bool> manual_update_requested{false};
 void request_update_check(bool include_prereleases=false) {
 #ifdef KALWER_LOCAL_BUILD
     // Published releases may omit local features. Never replace this build silently.
-    update_status.set("Local build with Notes commands. Automatic replacement is paused to preserve these changes. Install a published release manually when it includes Notes support.");
+    update_status.set("Local build with unpublished changes. Automatic replacement is paused. Install a published release manually after review.");
     return;
 #endif
     if(include_prereleases)manual_update_requested.store(true);
@@ -1655,7 +1657,8 @@ gboolean close_output_timeout(gpointer) {
     return G_SOURCE_REMOVE;
 }
 
-gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
+gboolean on_output_draw(GtkWidget* widget, cairo_t* cr, gpointer) {
+    const int width=gtk_widget_get_allocated_width(widget),canvas_height=gtk_widget_get_allocated_height(widget);
     const double elapsed = output_elapsed_ms();
     const double detach_start = state.popup_line_ms + 25.0;
     const double unfold_start = detach_start + 145.0;
@@ -1664,7 +1667,7 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
     const double unfold_progress = ease_out_cubic_cpu(
         (elapsed - unfold_start) / state.popup_expand_ms);
     const double line_start = 18.0 * detach_progress;
-    const double line_end = line_start + (kOutputWidth - 26.0) * line_progress;
+    const double line_end = line_start + (width - 26.0) * line_progress;
     constexpr double hinge_y = 18.0;
 
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -1673,8 +1676,8 @@ gboolean on_output_draw(GtkWidget*, cairo_t* cr, gpointer) {
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
     if (unfold_progress > 0.0) {
-        const double height = 2.0 + (kOutputHeight - hinge_y - 8.0) * unfold_progress;
-        cairo_rectangle(cr, line_start, hinge_y, kOutputWidth - line_start - 8.0,
+        const double height = 2.0 + (canvas_height - hinge_y - 8.0) * unfold_progress;
+        cairo_rectangle(cr, line_start, hinge_y, width - line_start - 8.0,
                         height);
         theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
         cairo_fill_preserve(cr);
@@ -1717,7 +1720,7 @@ gboolean output_animation_tick(GtkWidget*, GdkFrameClock*, gpointer) {
         const double unfold = ease_out_cubic_cpu(
             (elapsed - unfold_start) / state.popup_expand_ms);
         const int content_height = std::max(
-            1, static_cast<int>((kOutputHeight - 33.0) * unfold));
+            1, static_cast<int>(((state.output_files?430:kOutputHeight) - 33.0) * unfold));
         gtk_widget_set_size_request(state.output_content, -1, content_height);
         gtk_widget_set_opacity(state.output_content, unfold > 0.0 ? 1.0 : 0.0);
     }
@@ -1741,6 +1744,7 @@ void continue_in_ghostty(GtkButton*, gpointer);
 
 void open_multiline_editor(bool terminal=false);
 gboolean on_output_key(GtkWidget*, GdkEventKey* event, gpointer) {
+    if(state.output_files && kalwer::files::key(event))return TRUE;
     if(state.output_terminal && gtk_window_get_focus(GTK_WINDOW(state.output_window))==state.output_terminal && event->keyval==GDK_KEY_Return && (event->state&GDK_SHIFT_MASK)){open_multiline_editor(true);return TRUE;}
     if (event->keyval == GDK_KEY_Escape) {
         close_output_and_kalwer();
@@ -1880,6 +1884,7 @@ void output_destroyed(GtkWidget*, gpointer) {
     state.output_game = nullptr;
     state.output_fred = nullptr;
     state.output_updates = false;
+    state.output_files = false;
     state.output_status = nullptr;
     state.output_session.clear();
     state.output_command.clear();
@@ -1888,8 +1893,9 @@ void output_destroyed(GtkWidget*, gpointer) {
     hide_kalwer();
 }
 
-void open_popup(const kalwer::PopupDocument& document, const std::string& session = {}, std::optional<kalwer::games::Kind> game = std::nullopt, bool fred = false) {
+void open_popup(const kalwer::PopupDocument& document, const std::string& session = {}, std::optional<kalwer::games::Kind> game = std::nullopt, bool fred = false, bool files=false) {
     if (state.output_window) return;
+    state.output_files=files;
     const bool terminal = !session.empty();
     const std::string& command = document.title;
     state.output_interacted = false;
@@ -1903,7 +1909,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     state.output_window = gtk_application_window_new(state.app);
     // Retain the title for existing rules; placement is handled by the app.
     gtk_window_set_title(GTK_WINDOW(state.output_window), "Kalwer Command Output");
-    gtk_window_set_default_size(GTK_WINDOW(state.output_window), fred ? kalwer::fred_popup::width : kOutputWidth, fred ? kalwer::fred_popup::height : kOutputHeight);
+    gtk_window_set_default_size(GTK_WINDOW(state.output_window), fred ? kalwer::fred_popup::width : files?480:kOutputWidth, fred ? kalwer::fred_popup::height : files?430:kOutputHeight);
     gtk_window_set_resizable(GTK_WINDOW(state.output_window), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(state.output_window), FALSE);
     kalwer::place_output_popup(GTK_WINDOW(state.output_window), GTK_WINDOW(state.window),
@@ -1953,7 +1959,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     }
     GtkWidget* overlay = gtk_overlay_new();
     state.output_canvas = gtk_drawing_area_new();
-    gtk_widget_set_size_request(state.output_canvas, kOutputWidth, kOutputHeight);
+    gtk_widget_set_size_request(state.output_canvas, files?480:kOutputWidth, files?430:kOutputHeight);
     gtk_container_add(GTK_CONTAINER(overlay), state.output_canvas);
 
     state.output_content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -1995,7 +2001,10 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_box_pack_start(GTK_BOX(header), close, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state.output_content),header,FALSE,FALSE,0);
 
-    if (terminal) {
+    if(files) {
+        auto browser=kalwer::files::create(state.output_window,document.body,[]{close_output_and_kalwer();});
+        gtk_box_pack_start(GTK_BOX(state.output_content),browser,TRUE,TRUE,0);
+    } else if (terminal) {
     state.output_terminal = vte_terminal_new();
     PangoFontDescription* font =
         pango_font_description_from_string("JetBrainsMono Nerd Font 9");
@@ -2067,6 +2076,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     g_signal_connect(state.output_window, "destroy", G_CALLBACK(output_destroyed), nullptr);
 
     gtk_widget_show_all(state.output_window);
+    gtk_widget_set_visible(header,!files);
     gtk_widget_set_visible(copy, !game);
     if (game) gtk_label_set_text(GTK_LABEL(state.output_status), "GAME");
     gtk_widget_set_visible(ghostty, terminal);
@@ -2074,7 +2084,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_window_present(GTK_WINDOW(state.output_window));
     state.output_animation_source = gtk_widget_add_tick_callback(
         state.output_canvas, output_animation_tick, nullptr, nullptr);
-    if (!terminal) { gtk_widget_grab_focus(game ? state.output_game : state.output_text); return; }
+    if (!terminal) { if(!files)gtk_widget_grab_focus(game ? state.output_game : state.output_text); return; }
     state.output_status_source = g_timeout_add(100, poll_output_status, nullptr);
 
     gchar* argv[] = {
@@ -2717,7 +2727,12 @@ void activate_selection(bool elevated = false) {
     }
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/fred") {
+        if (name == "/file") {
+            auto input=std::string(gtk_entry_get_text(GTK_ENTRY(state.entry)));
+            open_popup({"/file",input.size()>5?trim_copy(input.substr(5)):std::string{}},{},std::nullopt,false,true);
+            stop_query(); state.opening=state.closing=false; gtk_widget_hide(state.window);
+        }
+        else if (name == "/fred") {
             open_popup({"FRED", ""}, {}, std::nullopt, true);
             stop_query(); state.opening = state.closing = false;
             state.hidden_us = g_get_monotonic_time(); gtk_widget_hide(state.window);
@@ -3477,6 +3492,7 @@ void show_popup() {
 }
 
 void activate(GtkApplication* app, gpointer) {
+    if(kalwer::files::window){gtk_window_present(GTK_WINDOW(kalwer::files::window));return;}
     if ((state.output_game || state.output_fred) && state.output_window) { gtk_window_present(GTK_WINDOW(state.output_window)); return; }
     if (state.window) {
         if (gtk_widget_get_visible(state.window)) dismiss_popup();
@@ -3499,7 +3515,7 @@ void activate(GtkApplication* app, gpointer) {
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
-        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() || notes_busy || notes_login_window ||
+        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() || notes_busy || notes_login_window || kalwer::files::window ||
             (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
         for (const auto& job : state.jobs) {
             int status = 0;
