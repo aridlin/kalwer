@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "uuid.lib")
 #endif
 #include <set>
 #include <shellapi.h>
@@ -103,13 +104,13 @@ struct Gif {
                 break;
             }
             image.SelectActiveFrame(&Gdiplus::FrameDimensionTime, index);
-            Gdiplus::Bitmap small(w, h, PixelFormat32bppPARGB);
-            Gdiplus::Graphics paint(&small);
+            Gdiplus::Bitmap frame_bitmap(w, h, PixelFormat32bppPARGB);
+            Gdiplus::Graphics paint(&frame_bitmap);
             paint.Clear(Gdiplus::Color(0, 0, 0, 0));
             paint.DrawImage(&image, 0, 0, w, h);
             auto bitmap = std::make_shared<Bitmap>();
-            if (small.GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &bitmap->handle) ==
-                Gdiplus::Ok) {
+            if (frame_bitmap.GetHBITMAP(Gdiplus::Color(0, 0, 0, 0),
+                                        &bitmap->handle) == Gdiplus::Ok) {
               std::lock_guard lock(d->mutex);
               d->frame = bitmap;
               d->revision++;

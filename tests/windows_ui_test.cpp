@@ -8,6 +8,7 @@
 #include "windows_features_test.cpp"
 #undef main
 int main() {
+    for(auto command:{"/file","/memes","/binup","/fred"}){auto matches=kalwer::matching_commands(command);assert(!matches.empty()&&matches.front()->name==command);}
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     assert(SUCCEEDED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)));
     state.instance=GetModuleHandleW(nullptr);
