@@ -21,6 +21,28 @@ int main(int argc, char **argv) {
               +[](gpointer) -> gboolean {
                 g_assert(state.output_files && !state.output_terminal &&
                          kalwer::files::window == state.output_window);
+                std::fprintf(
+                    stderr,
+                    "File browser: entries=%zu, tiles=%zu, thumbnail jobs=%u, "
+                    "max parallel=%u\n",
+                    kalwer::files::entries.size(), kalwer::files::rendered,
+                    kalwer::files::image_started, kalwer::files::image_peak);
+                auto placement = static_cast<kalwer::PopupPlacement *>(
+                    g_object_get_data(G_OBJECT(state.output_window),
+                                      "kalwer-popup-placement"));
+                g_assert(placement && placement->right_edge);
+                int x = 0, y = 0, w = 0, h = 0;
+                gtk_window_get_position(GTK_WINDOW(state.output_window), &x,
+                                        &y);
+                gtk_window_get_size(GTK_WINDOW(state.output_window), &w, &h);
+                GdkRectangle area{};
+                gdk_monitor_get_workarea(placement->monitor, &area);
+                auto expected = kalwer::popup_geometry(area, w, h);
+                g_assert(x == expected.x && y == expected.y);
+                {
+                  std::lock_guard lock(kalwer::live_backdrop.mutex);
+                  g_assert(!kalwer::live_backdrop.active);
+                }
                 auto pix = gdk_pixbuf_get_from_window(
                     gtk_widget_get_window(state.output_window), 0, 0,
                     gtk_widget_get_allocated_width(state.output_window),

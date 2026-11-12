@@ -54,6 +54,7 @@ struct PopupPlacement {
     int anchor_x, anchor_y;
     double progress = 0.0;
     bool layer = false;
+    bool right_edge = false;
     int last_x = G_MININT, last_y = G_MININT;
     ~PopupPlacement() { g_object_unref(launcher); g_object_unref(monitor); }
 };
@@ -77,7 +78,7 @@ inline void move_popup(GtkWindow* window) {
     const auto beside = popup_beside_launcher(area, launcher, width, height,
                                                placement->anchor_x, placement->anchor_y);
     const auto corner = popup_geometry(area, width, height);
-    const auto position = popup_interpolate(beside, corner, placement->progress);
+    const auto position = placement->right_edge ? corner : popup_interpolate(beside, corner, placement->progress);
     if (position.x == placement->last_x && position.y == placement->last_y) return;
     placement->last_x = position.x; placement->last_y = position.y;
 #ifdef KALWER_HAVE_LAYER_SHELL
@@ -97,11 +98,12 @@ inline void animate_popup_position(GtkWindow* window, double progress) {
     move_popup(window);
 }
 
-inline void place_output_popup(GtkWindow* window, GtkWindow* launcher, int anchor_x, int anchor_y) {
+inline void place_output_popup(GtkWindow* window, GtkWindow* launcher, int anchor_x, int anchor_y, bool right_edge=false) {
     GdkMonitor* monitor = popup_monitor(launcher);
     if (!monitor) return;
     auto* placement = new PopupPlacement{GTK_WINDOW(g_object_ref(launcher)),
         GDK_MONITOR(g_object_ref(monitor)), anchor_x, anchor_y};
+    placement->right_edge=right_edge;
     g_object_set_data_full(G_OBJECT(window), "kalwer-popup-placement", placement,
         +[](gpointer data) { delete static_cast<PopupPlacement*>(data); });
 #ifdef KALWER_HAVE_LAYER_SHELL

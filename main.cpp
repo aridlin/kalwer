@@ -68,9 +68,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.0+local.1";
+constexpr const char* kKalwerVersion = "0.13.1+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.0";
+constexpr const char* kKalwerVersion = "0.13.1";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -1914,7 +1914,7 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
     gtk_window_set_decorated(GTK_WINDOW(state.output_window), FALSE);
     kalwer::place_output_popup(GTK_WINDOW(state.output_window), GTK_WINDOW(state.window),
         static_cast<int>(kSearchX + kSearchWidth),
-        static_cast<int>(kSearchY + search_height() / 2.0 - 18.0));
+        static_cast<int>(kSearchY + search_height() / 2.0 - 18.0),files);
     gtk_window_set_keep_above(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(state.output_window), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(state.output_window), TRUE);
@@ -3508,7 +3508,7 @@ void activate(GtkApplication* app, gpointer) {
         bool settled=state.output_game
             ? !state.output_closing && output_elapsed_ms()>state.popup_line_ms+170+state.popup_expand_ms+200
             : !state.opening && !state.closing && g_get_monotonic_time()-state.opened_us>=650000;
-        kalwer::live_backdrop.configure(visible && settled,mode,kalwer::appearance.theme,kalwer::appearance.scale);
+        kalwer::live_backdrop.configure(visible && settled && !state.output_files,mode,kalwer::appearance.theme,kalwer::appearance.scale);
         if(visible && settled && mode) {if(state.window && gtk_widget_get_visible(state.window)){gtk_gl_area_queue_render(GTK_GL_AREA(state.canvas));}if(state.output_game)gtk_widget_queue_draw(state.output_game);}
         return G_SOURCE_CONTINUE;
     },nullptr);

@@ -72,6 +72,14 @@ int main(int argc, char **argv) {
   assert(expand("\"/tmp/a b\"") == "/tmp/a b");
   assert(kalwer::matching_commands("/file /tmp").size() == 1);
   assert(kalwer::matching_commands("/files").size() == 1);
+  assert(!folders_first(expand("")) && folders_first(root));
+  std::vector<Entry> ordering{
+      {"/old", "old", "folder", "", true, 1, "old"},
+      {"/new", "new", "text-x-generic", "", false, 2, "new"}};
+  sort_entries(ordering, false);
+  assert(ordering.front().name == "new");
+  sort_entries(ordering, true);
+  assert(ordering.front().name == "old");
   open(app, root);
   settle();
   assert(directory == root);
@@ -87,7 +95,10 @@ int main(int argc, char **argv) {
              g_object_get_data(G_OBJECT(oldest), "name"))) == "Picture.png");
   gtk_entry_set_text(GTK_ENTRY(search), "PICTURE");
   settle();
-  assert(!gtk_widget_get_child_visible(GTK_WIDGET(child)));
+  assert(matches.size() == 1);
+  assert(std::string(static_cast<const char *>(g_object_get_data(
+             G_OBJECT(gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(grid), 0)),
+             "name"))) == "Picture.png");
   gtk_entry_set_text(GTK_ENTRY(search), "");
   settle();
   GtkFlowBoxChild *picture = nullptr;
@@ -217,6 +228,41 @@ int main(int argc, char **argv) {
   settle();
   assert(previewing && selected == root + "/Picture.png");
   assert(bookmarks.size() == 1);
+  kalwer::files::back();
+  settle();
+  auto saved_entries = entries;
+  entries.clear();
+  for (int i = 0; i < 5000; ++i) {
+    auto name = "bulk-" + std::to_string(i) + ".png";
+    entries.push_back({root + "/" + name, name, "image-x-generic", "", false,
+                       static_cast<guint64>(i), name});
+  }
+  auto started = image_started;
+  auto start = g_get_monotonic_time();
+  refill();
+  auto render_us = g_get_monotonic_time() - start;
+  settle();
+  assert(entries.size() == 5000 && matches.size() == 5000 &&
+         rendered == page_size);
+  const auto initial_image_jobs = image_started - started;
+  assert(image_peak <= 2 && initial_image_jobs < 20);
+  auto adjustment =
+      gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller));
+  gtk_adjustment_set_value(adjustment,
+                           gtk_adjustment_get_upper(adjustment) -
+                               gtk_adjustment_get_page_size(adjustment));
+  settle();
+  assert(rendered > page_size && rendered < 5000);
+  gtk_entry_set_text(GTK_ENTRY(search), "bulk-4999");
+  settle();
+  assert(matches.size() == 1 && rendered == 1);
+  assert(entries[matches.front()].name == "bulk-4999.png");
+  std::cout << "5000-entry grid: initial tiles=" << page_size
+            << ", initial image jobs=" << initial_image_jobs
+            << ", max parallel=" << image_peak
+            << ", initial render ms=" << render_us / 1000.0
+            << "; full-list search and incremental scrolling passed\n";
+  entries = std::move(saved_entries);
   gtk_widget_destroy(window);
   open(app, root);
   gtk_widget_destroy(window);

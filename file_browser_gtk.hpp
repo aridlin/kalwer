@@ -1,6 +1,7 @@
 #pragma once
 #include "appearance.hpp"
 #include <algorithm>
+#include <deque>
 #include <functional>
 #include <gtk/gtk.h>
 #include <string>
@@ -16,6 +17,11 @@ inline std::string directory, selected, pending_preview;
 inline std::vector<std::string> bookmarks;
 inline unsigned generation = 0;
 inline bool previewing = false;
+inline GtkWidget *scroller = nullptr;
+inline GCancellable *listing_cancel = nullptr;
+inline guint viewport_idle = 0, append_idle = 0;
+inline GtkCssProvider *file_css = nullptr;
+inline void queue_visible();
 enum { URI = 1, GNOME = 2 };
 inline GtkTargetEntry targets[] = {
     {const_cast<char *>("text/uri-list"), 0, URI},
@@ -96,7 +102,33 @@ struct ImageWork {
   GWeakRef image;
   std::string path;
   int size;
+  unsigned generation;
+  guint64 modified_us;
 };
+inline std::deque<ImageWork *> image_queue;
+inline unsigned image_active = 0, image_peak = 0, image_started = 0;
+struct CachedImage {
+  std::string key;
+  GdkPixbuf *pix;
+};
+inline std::deque<CachedImage> image_cache;
+inline std::string image_key(const ImageWork *w) {
+  return w->path + "\n" + std::to_string(w->modified_us);
+}
+inline void dispose_image(ImageWork *w) {
+  g_weak_ref_clear(&w->image);
+  delete w;
+}
+inline bool on_screen(GtkWidget *image) {
+  if (!window || previewing || !scroller || !gtk_widget_get_mapped(image))
+    return false;
+  int x = 0, y = 0;
+  if (!gtk_widget_translate_coordinates(image, scroller, 0, 0, &x, &y))
+    return false;
+  return y + gtk_widget_get_allocated_height(image) > 0 &&
+         y < gtk_widget_get_allocated_height(scroller);
+}
+inline void pump_images();
 inline std::string cached_thumbnail(const std::string &path) {
   auto u = uri(path);
   auto hash = g_compute_checksum_for_string(G_CHECKSUM_MD5, u.c_str(), -1);
@@ -112,51 +144,108 @@ inline std::string cached_thumbnail(const std::string &path) {
   g_free(hash);
   return found;
 }
-inline void image_async(GtkWidget *image, const std::string &path, int size) {
-  auto w = new ImageWork{{}, path, size};
+inline void pump_images() {
+  while (image_active < 2 && !image_queue.empty()) {
+    auto w = image_queue.front();
+    image_queue.pop_front();
+    auto image = g_weak_ref_get(&w->image);
+    bool valid = image && w->generation == generation &&
+                 (w->size > 96 || on_screen(GTK_WIDGET(image)));
+    if (!valid) {
+      if (image) {
+        g_object_set_data(G_OBJECT(image), "thumbnail-requested", nullptr);
+        g_object_unref(image);
+      }
+      dispose_image(w);
+      continue;
+    }
+    if (w->size == 96) {
+      auto key = image_key(w);
+      auto found = std::find_if(image_cache.begin(), image_cache.end(),
+                                [&](const auto &e) { return e.key == key; });
+      if (found != image_cache.end()) {
+        gtk_image_set_from_pixbuf(GTK_IMAGE(image), found->pix);
+        auto hit = *found;
+        image_cache.erase(found);
+        image_cache.push_back(hit);
+        g_object_unref(image);
+        dispose_image(w);
+        continue;
+      }
+    }
+    g_object_unref(image);
+    ++image_active;
+    ++image_started;
+    image_peak = std::max(image_peak, image_active);
+    auto task = g_task_new(
+        nullptr, nullptr,
+        +[](GObject *, GAsyncResult *result, gpointer) {
+          auto w =
+              static_cast<ImageWork *>(g_task_get_task_data(G_TASK(result)));
+          auto pix = static_cast<GdkPixbuf *>(
+              g_task_propagate_pointer(G_TASK(result), nullptr));
+          auto image = g_weak_ref_get(&w->image);
+          if (image) {
+            if (pix && w->generation == generation)
+              gtk_image_set_from_pixbuf(GTK_IMAGE(image), pix);
+            g_object_unref(image);
+          }
+          if (pix) {
+            if (w->size == 96) {
+              image_cache.push_back(
+                  {image_key(w), GDK_PIXBUF(g_object_ref(pix))});
+              while (image_cache.size() > 64) {
+                g_object_unref(image_cache.front().pix);
+                image_cache.pop_front();
+              }
+            }
+            g_object_unref(pix);
+          }
+          --image_active;
+          pump_images();
+        },
+        nullptr);
+    g_task_set_task_data(
+        task, w,
+        +[](gpointer p) { dispose_image(static_cast<ImageWork *>(p)); });
+    g_task_run_in_thread(
+        task, +[](GTask *task, gpointer, gpointer data, GCancellable *) {
+          auto w = static_cast<ImageWork *>(data);
+          std::string path;
+          if (w->size == 96)
+            path = cached_thumbnail(w->path);
+          if (path.empty()) {
+            auto type =
+                g_content_type_guess(w->path.c_str(), nullptr, 0, nullptr);
+            if (type && std::string(type).starts_with("image/"))
+              path = w->path;
+            else if (w->size > 96)
+              path = cached_thumbnail(w->path);
+            g_free(type);
+          }
+          auto pix = path.empty()
+                         ? nullptr
+                         : gdk_pixbuf_new_from_file_at_scale(
+                               path.c_str(), w->size, w->size, TRUE, nullptr);
+          if (pix) {
+            auto oriented = gdk_pixbuf_apply_embedded_orientation(pix);
+            g_object_unref(pix);
+            pix = oriented;
+          }
+          g_task_return_pointer(task, pix, pix ? g_object_unref : nullptr);
+        });
+    g_object_unref(task);
+  }
+}
+inline void image_async(GtkWidget *image, const std::string &path, int size,
+                        guint64 modified_us = 0) {
+  auto w = new ImageWork{{}, path, size, generation, modified_us};
   g_weak_ref_init(&w->image, G_OBJECT(image));
-  auto task = g_task_new(
-      nullptr, nullptr,
-      +[](GObject *, GAsyncResult *result, gpointer) {
-        auto w = static_cast<ImageWork *>(g_task_get_task_data(G_TASK(result)));
-        auto pix = static_cast<GdkPixbuf *>(
-            g_task_propagate_pointer(G_TASK(result), nullptr));
-        auto obj = g_weak_ref_get(&w->image);
-        if (obj) {
-          if (pix)
-            gtk_image_set_from_pixbuf(GTK_IMAGE(obj), pix);
-          g_object_unref(obj);
-        }
-        if (pix)
-          g_object_unref(pix);
-      },
-      nullptr);
-  g_task_set_task_data(
-      task, w, +[](gpointer p) {
-        auto w = static_cast<ImageWork *>(p);
-        g_weak_ref_clear(&w->image);
-        delete w;
-      });
-  g_task_run_in_thread(
-      task, +[](GTask *task, gpointer, gpointer data, GCancellable *) {
-        auto w = static_cast<ImageWork *>(data);
-        auto type = g_content_type_guess(w->path.c_str(), nullptr, 0, nullptr);
-        auto path = type && std::string(type).starts_with("image/")
-                        ? w->path
-                        : cached_thumbnail(w->path);
-        g_free(type);
-        auto pix = path.empty()
-                       ? nullptr
-                       : gdk_pixbuf_new_from_file_at_scale(
-                             path.c_str(), w->size, w->size, TRUE, nullptr);
-        if (pix) {
-          auto oriented = gdk_pixbuf_apply_embedded_orientation(pix);
-          g_object_unref(pix);
-          pix = oriented;
-        }
-        g_task_return_pointer(task, pix, pix ? g_object_unref : nullptr);
-      });
-  g_object_unref(task);
+  if (size > 96)
+    image_queue.push_front(w);
+  else
+    image_queue.push_back(w);
+  pump_images();
 }
 struct TextWork {
   GWeakRef buffer;
@@ -219,6 +308,7 @@ inline void back() {
   gtk_widget_show(toolbar);
   gtk_widget_show(browser_tools);
   gtk_widget_grab_focus(grid);
+  queue_visible();
 }
 inline void show_file(const std::string &path) {
   if (!g_file_test(path.c_str(), G_FILE_TEST_IS_REGULAR)) {
@@ -303,21 +393,156 @@ struct Entry {
   std::string path, name, icon, thumbnail;
   bool folder;
   guint64 modified_us = 0;
+  std::string folded;
 };
 struct Listing {
   unsigned generation;
   std::string path, error;
   std::vector<Entry> entries;
 };
-inline gboolean filter(GtkFlowBoxChild *child, gpointer) {
-  auto path =
-      static_cast<const char *>(g_object_get_data(G_OBJECT(child), "name"));
-  char *name = g_utf8_casefold(path ? path : "", -1);
-  char *needle = g_utf8_casefold(gtk_entry_get_text(GTK_ENTRY(search)), -1);
-  bool match = std::string(name).find(needle) != std::string::npos;
-  g_free(name);
+inline std::vector<Entry> entries;
+inline std::vector<size_t> matches;
+inline size_t rendered = 0;
+inline constexpr size_t page_size = 48;
+inline bool folders_first(const std::string &path) {
+  return expand(path) != expand("");
+}
+inline void sort_entries(std::vector<Entry> &items, bool folders) {
+  std::sort(items.begin(), items.end(),
+            [folders](const auto &a, const auto &b) {
+              if (folders && a.folder != b.folder)
+                return a.folder > b.folder;
+              if (a.modified_us != b.modified_us)
+                return a.modified_us > b.modified_us;
+              return g_utf8_collate(a.name.c_str(), b.name.c_str()) < 0;
+            });
+}
+inline void append_page() {
+  const auto end = std::min(rendered + page_size, matches.size());
+  for (; rendered < end; ++rendered) {
+    const auto &e = entries[matches[rendered]];
+    auto box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    auto image =
+        gtk_image_new_from_icon_name(e.icon.c_str(), GTK_ICON_SIZE_DIALOG);
+    gtk_widget_set_size_request(image, 96, 84);
+    gtk_box_pack_start(GTK_BOX(box), image, FALSE, FALSE, 0);
+    auto label = gtk_label_new(e.name.c_str());
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_label_set_max_width_chars(GTK_LABEL(label), 16);
+    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+    auto tile = gtk_event_box_new();
+    gtk_event_box_set_above_child(GTK_EVENT_BOX(tile), TRUE);
+    gtk_container_add(GTK_CONTAINER(tile), box);
+    gtk_flow_box_insert(GTK_FLOW_BOX(grid), tile, -1);
+    auto child = gtk_widget_get_parent(tile);
+    g_object_set_data_full(G_OBJECT(child), "name", g_strdup(e.name.c_str()),
+                           g_free);
+    g_object_set_data_full(G_OBJECT(child), "path", g_strdup(e.path.c_str()),
+                           g_free);
+    gtk_widget_set_tooltip_text(child, e.path.c_str());
+    if (!e.folder)
+      drag(tile, e.path);
+    g_signal_connect(tile, "button-press-event",
+                     G_CALLBACK(+[](GtkWidget *tile, GdkEventButton *event,
+                                    gpointer) -> gboolean {
+                       if (event->button != 1)
+                         return FALSE;
+                       auto child = gtk_widget_get_parent(tile);
+                       auto flow = gtk_widget_get_parent(child);
+                       gtk_flow_box_select_child(GTK_FLOW_BOX(flow),
+                                                 GTK_FLOW_BOX_CHILD(child));
+                       gtk_widget_grab_focus(child);
+                       if (event->type == GDK_2BUTTON_PRESS)
+                         g_signal_emit_by_name(flow, "child-activated", child);
+                       return FALSE;
+                     }),
+                     nullptr);
+    if (!e.folder) {
+      g_object_set_data_full(G_OBJECT(image), "thumbnail-path",
+                             g_strdup(e.path.c_str()), g_free);
+      auto stamp = new guint64(e.modified_us);
+      g_object_set_data_full(
+          G_OBJECT(image), "modified-us", stamp,
+          +[](gpointer p) { delete static_cast<guint64 *>(p); });
+    }
+  }
+  gtk_widget_show_all(grid);
+  queue_visible();
+}
+inline void refill() {
+  if (!window)
+    return;
+  clear(grid);
+  rendered = 0;
+  matches.clear();
+  auto needle = g_utf8_casefold(gtk_entry_get_text(GTK_ENTRY(search)), -1);
+  for (size_t i = 0; i < entries.size(); ++i)
+    if (entries[i].folded.find(needle) != std::string::npos)
+      matches.push_back(i);
   g_free(needle);
-  return match;
+  auto adjustment =
+      gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller));
+  gtk_adjustment_set_value(adjustment, 0);
+  append_page();
+  auto first = gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(grid), 0);
+  if (first) {
+    gtk_flow_box_select_child(GTK_FLOW_BOX(grid), first);
+    if (!gtk_widget_has_focus(search))
+      gtk_widget_grab_focus(GTK_WIDGET(first));
+  }
+  gtk_label_set_text(GTK_LABEL(status), entries.empty()   ? "Folder is empty."
+                                        : matches.empty() ? "No matching files."
+                                                          : "");
+}
+inline void queue_visible() {
+  if (viewport_idle || !window)
+    return;
+  viewport_idle = g_idle_add(
+      +[](gpointer) -> gboolean {
+        viewport_idle = 0;
+        if (!window || previewing)
+          return G_SOURCE_REMOVE;
+        auto children = gtk_container_get_children(GTK_CONTAINER(grid));
+        for (auto p = children; p; p = p->next) {
+          auto tile = gtk_bin_get_child(GTK_BIN(p->data));
+          auto box = gtk_bin_get_child(GTK_BIN(tile));
+          auto kids = gtk_container_get_children(GTK_CONTAINER(box));
+          auto image = kids ? GTK_WIDGET(kids->data) : nullptr;
+          g_list_free(kids);
+          if (!image || !on_screen(image) ||
+              g_object_get_data(G_OBJECT(image), "thumbnail-requested"))
+            continue;
+          auto path = static_cast<const char *>(
+              g_object_get_data(G_OBJECT(image), "thumbnail-path"));
+          if (path) {
+            g_object_set_data(G_OBJECT(image), "thumbnail-requested",
+                              GINT_TO_POINTER(1));
+            auto stamp = static_cast<guint64 *>(
+                g_object_get_data(G_OBJECT(image), "modified-us"));
+            image_async(image, path, 96, stamp ? *stamp : 0);
+          }
+        }
+        g_list_free(children);
+        return G_SOURCE_REMOVE;
+      },
+      nullptr);
+}
+inline void scroll_changed() {
+  queue_visible();
+  if (!window || append_idle || rendered >= matches.size())
+    return;
+  auto a = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller));
+  auto remaining = gtk_adjustment_get_upper(a) - gtk_adjustment_get_value(a) -
+                   gtk_adjustment_get_page_size(a);
+  if (remaining < gtk_adjustment_get_page_size(a))
+    append_idle = g_idle_add(
+        +[](gpointer) -> gboolean {
+          append_idle = 0;
+          if (window && !previewing)
+            append_page();
+          return G_SOURCE_REMOVE;
+        },
+        nullptr);
 }
 inline void browse(std::string path) {
   pending_preview.clear();
@@ -327,9 +552,17 @@ inline void browse(std::string path) {
     return;
   }
   auto request = ++generation;
+  if (listing_cancel)
+    g_cancellable_cancel(listing_cancel);
+  g_clear_object(&listing_cancel);
+  listing_cancel = g_cancellable_new();
+  while (!image_queue.empty()) {
+    dispose_image(image_queue.front());
+    image_queue.pop_front();
+  }
   auto w = new Listing{request, path, {}, {}};
   auto task = g_task_new(
-      nullptr, nullptr,
+      nullptr, listing_cancel,
       +[](GObject *, GAsyncResult *result, gpointer) {
         auto w = static_cast<Listing *>(g_task_get_task_data(G_TASK(result)));
         if (!window || w->generation != generation)
@@ -341,6 +574,7 @@ inline void browse(std::string path) {
         directory = w->path;
         selected.clear();
         back();
+        entries.clear();
         clear(grid);
         auto shown =
             directory.starts_with(std::string(g_get_home_dir()) + "/")
@@ -350,55 +584,8 @@ inline void browse(std::string path) {
         gtk_entry_set_text(GTK_ENTRY(location), shown.c_str());
         gtk_entry_set_text(GTK_ENTRY(search), "");
         refresh_places();
-        for (const auto &e : w->entries) {
-          auto box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-          auto image = gtk_image_new_from_icon_name(e.icon.c_str(),
-                                                    GTK_ICON_SIZE_DIALOG);
-          gtk_widget_set_size_request(image, 96, 84);
-          gtk_box_pack_start(GTK_BOX(box), image, FALSE, FALSE, 0);
-          auto label = gtk_label_new(e.name.c_str());
-          gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
-          gtk_label_set_max_width_chars(GTK_LABEL(label), 16);
-          gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
-          auto tile = gtk_event_box_new();
-          gtk_event_box_set_above_child(GTK_EVENT_BOX(tile), TRUE);
-          gtk_container_add(GTK_CONTAINER(tile), box);
-          gtk_flow_box_insert(GTK_FLOW_BOX(grid), tile, -1);
-          auto child = gtk_widget_get_parent(tile);
-          g_object_set_data_full(G_OBJECT(child), "name",
-                                 g_strdup(e.name.c_str()), g_free);
-          g_object_set_data_full(G_OBJECT(child), "path",
-                                 g_strdup(e.path.c_str()), g_free);
-          gtk_widget_set_tooltip_text(child, e.path.c_str());
-          if (!e.folder)
-            drag(tile, e.path);
-          g_signal_connect(
-              tile, "button-press-event",
-              G_CALLBACK(+[](GtkWidget *tile, GdkEventButton *event,
-                             gpointer) -> gboolean {
-                if (event->button != 1)
-                  return FALSE;
-                auto child = gtk_widget_get_parent(tile);
-                auto flow = gtk_widget_get_parent(child);
-                gtk_flow_box_select_child(GTK_FLOW_BOX(flow),
-                                          GTK_FLOW_BOX_CHILD(child));
-                gtk_widget_grab_focus(child);
-                if (event->type == GDK_2BUTTON_PRESS)
-                  g_signal_emit_by_name(flow, "child-activated", child);
-                return FALSE;
-              }),
-              nullptr);
-          if (!e.thumbnail.empty())
-            image_async(image, e.thumbnail, 96);
-        }
-        gtk_widget_show_all(grid);
-        gtk_label_set_text(GTK_LABEL(status),
-                           w->entries.empty() ? "Folder is empty." : "");
-        auto first = gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(grid), 0);
-        if (first) {
-          gtk_flow_box_select_child(GTK_FLOW_BOX(grid), first);
-          gtk_widget_grab_focus(GTK_WIDGET(first));
-        }
+        entries = std::move(w->entries);
+        refill();
         if (!pending_preview.empty()) {
           auto path = pending_preview;
           pending_preview.clear();
@@ -409,26 +596,27 @@ inline void browse(std::string path) {
   g_task_set_task_data(
       task, w, +[](gpointer p) { delete static_cast<Listing *>(p); });
   g_task_run_in_thread(
-      task, +[](GTask *task, gpointer, gpointer data, GCancellable *) {
+      task, +[](GTask *task, gpointer, gpointer data, GCancellable *cancel) {
         auto w = static_cast<Listing *>(data);
         auto file = g_file_new_for_path(w->path.c_str());
         GError *error = nullptr;
         auto enumerator = g_file_enumerate_children(
             file,
-            "standard::name,standard::display-name,standard::type,standard::"
-            "icon,standard::content-type,thumbnail::path,time::modified,time::"
+            "standard::name,standard::display-name,standard::type,"
+            "time::modified,time::"
             "modified-usec",
-            G_FILE_QUERY_INFO_NONE, nullptr, &error);
+            G_FILE_QUERY_INFO_NONE, cancel, &error);
         if (enumerator) {
           while (auto info =
-                     g_file_enumerator_next_file(enumerator, nullptr, &error)) {
+                     g_file_enumerator_next_file(enumerator, cancel, &error)) {
             const char *name = g_file_info_get_name(info);
             if (name[0] != '.') {
               bool folder =
                   g_file_info_get_file_type(info) == G_FILE_TYPE_DIRECTORY;
               auto p = g_file_get_child(file, name);
               char *full = g_file_get_path(p);
-              auto icon = g_file_info_get_icon(info);
+              auto type = g_content_type_guess(name, nullptr, 0, nullptr);
+              auto icon = type ? g_content_type_get_icon(type) : nullptr;
               char *icon_name = icon ? g_icon_to_string(icon) : nullptr;
               Entry e{full ? full : "",
                       g_file_info_get_display_name(info),
@@ -439,22 +627,19 @@ inline void browse(std::string path) {
                           info, G_FILE_ATTRIBUTE_TIME_MODIFIED) *
                               G_USEC_PER_SEC +
                           g_file_info_get_attribute_uint32(
-                              info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC)};
-              if (icon_name && G_IS_THEMED_ICON(icon)) {
+                              info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC),
+                      {}};
+              if (!folder && icon_name && G_IS_THEMED_ICON(icon)) {
                 auto names = g_themed_icon_get_names(G_THEMED_ICON(icon));
                 if (names && names[0])
                   e.icon = names[0];
               }
-              const char *thumb = g_file_info_get_attribute_byte_string(
-                  info, G_FILE_ATTRIBUTE_THUMBNAIL_PATH);
-              const char *type = g_file_info_get_content_type(info);
-              if (thumb)
-                e.thumbnail = thumb;
-              else if (!folder && type &&
-                       std::string(type).starts_with("image/"))
-                e.thumbnail = e.path;
-              else if (!folder)
-                e.thumbnail = cached_thumbnail(e.path);
+              auto folded = g_utf8_casefold(e.name.c_str(), -1);
+              e.folded = folded;
+              g_free(folded);
+              g_free(type);
+              if (icon)
+                g_object_unref(icon);
               w->entries.push_back(std::move(e));
               g_free(full);
               g_free(icon_name);
@@ -469,14 +654,7 @@ inline void browse(std::string path) {
           g_error_free(error);
         }
         g_object_unref(file);
-        std::sort(w->entries.begin(), w->entries.end(),
-                  [](const auto &a, const auto &b) {
-                    if (a.folder != b.folder)
-                      return a.folder > b.folder;
-                    if (a.modified_us != b.modified_us)
-                      return a.modified_us > b.modified_us;
-                    return g_utf8_collate(a.name.c_str(), b.name.c_str()) < 0;
-                  });
+        sort_entries(w->entries, folders_first(w->path));
         g_task_return_boolean(task, TRUE);
       });
   g_object_unref(task);
@@ -638,10 +816,22 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   search = gtk_search_entry_new();
   gtk_entry_set_placeholder_text(GTK_ENTRY(search), "Find a file…");
   gtk_box_pack_start(GTK_BOX(browser_tools), search, FALSE, FALSE, 0);
-  g_signal_connect(
-      search, "activate",
-      G_CALLBACK(+[](GtkWidget *, gpointer) { first_match(true); }), nullptr);
+  g_signal_connect(search, "activate", G_CALLBACK(+[](GtkWidget *, gpointer) {
+                     refill();
+                     first_match(true);
+                   }),
+                   nullptr);
   auto scroll = gtk_scrolled_window_new(nullptr, nullptr);
+  scroller = scroll;
+  auto adjustment =
+      gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
+  g_signal_connect(
+      adjustment, "value-changed",
+      G_CALLBACK(+[](GtkAdjustment *, gpointer) { scroll_changed(); }),
+      nullptr);
+  g_signal_connect(
+      adjustment, "changed",
+      G_CALLBACK(+[](GtkAdjustment *, gpointer) { queue_visible(); }), nullptr);
   gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
   grid = gtk_flow_box_new();
   gtk_widget_set_valign(grid, GTK_ALIGN_START);
@@ -649,12 +839,14 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   gtk_flow_box_set_activate_on_single_click(GTK_FLOW_BOX(grid), FALSE);
   gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(grid), 4);
   gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(grid), 3);
-  gtk_flow_box_set_filter_func(GTK_FLOW_BOX(grid), filter, nullptr, nullptr);
+  g_signal_connect(grid, "size-allocate",
+                   G_CALLBACK(+[](GtkWidget *, GtkAllocation *, gpointer) {
+                     queue_visible();
+                   }),
+                   nullptr);
   gtk_container_add(GTK_CONTAINER(scroll), grid);
   g_signal_connect(search, "search-changed",
-                   G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     gtk_flow_box_invalidate_filter(GTK_FLOW_BOX(grid));
-                   }),
+                   G_CALLBACK(+[](GtkWidget *, gpointer) { refill(); }),
                    nullptr);
   g_signal_connect(
       grid, "child-activated",
@@ -685,15 +877,37 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   gtk_box_pack_start(GTK_BOX(preview), preview_box, TRUE, TRUE, 0);
   status = gtk_label_new("");
   gtk_box_pack_start(GTK_BOX(root), status, FALSE, FALSE, 0);
-  g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget *, gpointer) {
-                     window = nullptr;
-                     ++generation;
-                     directory.clear();
-                     selected.clear();
-                     previewing = false;
-                     pending_preview.clear();
-                   }),
-                   nullptr);
+  g_signal_connect(
+      window, "destroy", G_CALLBACK(+[](GtkWidget *host, gpointer) {
+        window = nullptr;
+        ++generation;
+        if (listing_cancel)
+          g_cancellable_cancel(listing_cancel);
+        g_clear_object(&listing_cancel);
+        if (viewport_idle)
+          g_source_remove(viewport_idle);
+        viewport_idle = 0;
+        if (append_idle)
+          g_source_remove(append_idle);
+        append_idle = 0;
+        while (!image_queue.empty()) {
+          dispose_image(image_queue.front());
+          image_queue.pop_front();
+        }
+        entries.clear();
+        matches.clear();
+        rendered = 0;
+        if (file_css) {
+          gtk_style_context_remove_provider_for_screen(
+              gtk_widget_get_screen(host), GTK_STYLE_PROVIDER(file_css));
+          g_clear_object(&file_css);
+        }
+        directory.clear();
+        selected.clear();
+        previewing = false;
+        pending_preview.clear();
+      }),
+      nullptr);
   bookmarks.clear();
   auto key = g_key_file_new();
   if (g_key_file_load_from_file(key, config().c_str(), G_KEY_FILE_NONE,
@@ -758,7 +972,7 @@ inline GtkWidget *create(GtkWidget *host, std::string path,
   gtk_style_context_add_provider_for_screen(
       gtk_widget_get_screen(window), GTK_STYLE_PROVIDER(css),
       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-  g_object_unref(css);
+  file_css = css;
   gtk_widget_show_all(root);
   auto initial = expand(path);
   if (g_file_test(initial.c_str(), G_FILE_TEST_IS_REGULAR)) {
