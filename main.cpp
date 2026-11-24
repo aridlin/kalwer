@@ -72,9 +72,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.3+local.1";
+constexpr const char* kKalwerVersion = "0.13.4+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.3";
+constexpr const char* kKalwerVersion = "0.13.4";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -697,6 +697,87 @@ GdkPixbuf* result_icon(const std::string& name) {
     return icon;
 }
 
+void draw_clipboard_icon(cairo_t* cr,double x,double y,double size) {
+    cairo_save(cr);
+    cairo_translate(cr,x,y); cairo_scale(cr,size/22,size/22);
+    cairo_set_line_width(cr,1.8);
+    theme_source_rgba(cr,.65,.92,.74,1);
+    rounded_rectangle(cr,3,3,16,18,3); cairo_stroke(cr);
+    rounded_rectangle(cr,7,1,8,6,2);
+    theme_source_rgba(cr,0,.075,.043,1); cairo_fill_preserve(cr);
+    theme_source_rgba(cr,.65,.92,.74,1); cairo_stroke(cr);
+    cairo_move_to(cr,7,11); cairo_line_to(cr,15,11);
+    cairo_move_to(cr,7,16); cairo_line_to(cr,13,16); cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+enum class CommandGlyph { help, folder, settings, globe, game, timer, terminal, power };
+
+CommandGlyph slash_glyph(std::string_view name) {
+    if (name=="/delaypress" || name=="/jobs") return CommandGlyph::timer;
+    if (name=="/file" || name=="/files" || name=="/binup" || name=="/apps" ||
+        name.find("index")!=name.npos || name.ends_with("-import")) return CommandGlyph::folder;
+    if (name.starts_with("/config") || name=="/settings" || name=="/updates" || name=="/categories")
+        return CommandGlyph::settings;
+    if (name=="/web" || name=="/memes" || name=="/wemote") return CommandGlyph::globe;
+    if (name=="/help" || name=="/about") return CommandGlyph::help;
+    if (name=="/exit") return CommandGlyph::power;
+    if (name=="/terminal" || name=="/wssh" || name=="/malcip") return CommandGlyph::terminal;
+    return CommandGlyph::game;
+}
+
+void draw_slash_icon(cairo_t* cr,const std::string& name,double x,double y,double size) {
+    if (name=="/manualpaste") { draw_clipboard_icon(cr,x,y,size); return; }
+    cairo_save(cr);
+    cairo_translate(cr,x,y);
+    cairo_scale(cr,size/24,size/24);
+    theme_source_rgba(cr,.65,.92,.74,1);
+    cairo_set_line_width(cr,1.35);
+    cairo_set_line_cap(cr,CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr,CAIRO_LINE_JOIN_ROUND);
+    auto line=[&](double x1,double y1,double x2,double y2) {
+        cairo_move_to(cr,x1,y1); cairo_line_to(cr,x2,y2);
+    };
+    auto circle=[&](double cx,double cy,double radius) {
+        cairo_new_sub_path(cr); cairo_arc(cr,cx,cy,radius,0,2*G_PI);
+    };
+    switch (slash_glyph(name)) {
+    case CommandGlyph::help:
+        circle(12,12,8);
+        cairo_new_sub_path(cr); cairo_arc(cr,12,9.5,2.5,G_PI,2.5*G_PI);
+        cairo_line_to(cr,12,13.5); circle(12,16,0.45); break;
+    case CommandGlyph::folder:
+        cairo_move_to(cr,4,7); cairo_line_to(cr,10,7); cairo_line_to(cr,12,9);
+        cairo_line_to(cr,20,9); cairo_line_to(cr,20,18); cairo_line_to(cr,4,18);
+        cairo_close_path(cr); break;
+    case CommandGlyph::settings:
+        for (int i=0;i<3;++i) {
+            const int cy=7+5*i, cx=i==1?15:9;
+            line(4,cy,cx-2,cy); circle(cx,cy,2); line(cx+2,cy,20,cy);
+        }
+        break;
+    case CommandGlyph::globe:
+        circle(12,12,8); line(4,12,20,12);
+        cairo_save(cr); cairo_translate(cr,12,12); cairo_scale(cr,.5,1);
+        circle(0,0,8); cairo_restore(cr); break;
+    case CommandGlyph::game:
+        rounded_rectangle(cr,3,7,18,11,4);
+        line(6,12,12,12); line(9,9.5,9,14.5);
+        circle(16,11,.55); circle(18,14,.55); break;
+    case CommandGlyph::timer:
+        circle(12,13,7); line(10,3,14,3); line(12,3,12,6);
+        line(12,9,12,13); line(12,13,15,15); break;
+    case CommandGlyph::terminal:
+        rounded_rectangle(cr,3,5,18,14,3);
+        line(6,9,9,12); line(9,12,6,15); line(12,15,17,15); break;
+    case CommandGlyph::power:
+        cairo_new_sub_path(cr); cairo_arc(cr,12,12,8,-G_PI/3,4*G_PI/3);
+        line(12,3,12,12); break;
+    }
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 void draw_icon(cairo_t* cr, const std::string& name, double x, double y, double size) {
     GdkPixbuf* icon = result_icon(name);
     if (icon) {
@@ -912,6 +993,8 @@ void draw_results(cairo_t* cr) {
 
         if (!result.character_preview.empty())
             draw_character_preview(cr, result.character_preview, kResultX + 12, y + 10);
+        else if (result.provider=="kalwer-slash")
+            draw_slash_icon(cr,result.identifier,kResultX+17,y+15,28);
         else draw_icon(cr, result.icon, kResultX + 12, y + 10, 38);
 
         const std::string title = ellipsize_utf8(result.text, 48);
@@ -2767,7 +2850,10 @@ void activate_selection(bool elevated = false) {
     }
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/delaypress") {
+        if (name == "/manualpaste") {
+            notice::manualpaste();
+        }
+        else if (name == "/delaypress") {
             notice::start(gtk_entry_get_text(GTK_ENTRY(state.entry)));
         }
         else if (name == "/file" || name=="/memes" || name=="/binup") {
@@ -3379,7 +3465,7 @@ void on_entry_changed(GtkEditable*, gpointer) {
         std::vector<Result> commands;
         for (const auto* c : kalwer::matching_commands(input)) {
             Result r; r.identifier = c->name; r.text = c->name; r.subtext = c->description;
-            r.provider = "kalwer-slash"; r.icon = c->name=="/delaypress" ? "preferences-system-time" : "utilities-terminal";
+            r.provider = "kalwer-slash";
             commands.push_back(std::move(r));
         }
         show_local_results(std::move(commands));

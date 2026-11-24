@@ -5,6 +5,9 @@ int main() {
     using kalwer::delaypress::parse;
     auto request=parse("/delaypress enter 20s");
     assert(request && request->key.linux_code==KEY_ENTER && request->seconds==20);
+    auto reverse=parse("/delaypress 20s enter");
+    assert(reverse && reverse->key.linux_code==KEY_ENTER && reverse->seconds==20);
+    assert(parse("/delaypress 20 Enter")->seconds==20);
     assert(parse("/delaypress Return 1S") && parse("/delaypress Space 86400"));
     for (auto command : {"/delaypress", "/delaypress enter", "/delaypress enter 0s",
          "/delaypress enter 3.9s", "/delaypress tab -2", "/delaypress enter 86401s",

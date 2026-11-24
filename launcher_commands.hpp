@@ -8,9 +8,7 @@ namespace kalwer {
 struct PopupDocument { std::string title, body; };
 struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
-#ifdef __linux__
-    Command{"/delaypress", "Schedule a keypress: /delaypress enter 20s (Esc cancels)", ""},
-#endif
+    Command{"/help", "Commands and keyboard shortcuts", ""},
     Command{"/kar-import", "Install Kar artwork: /kar-import <path to art.karp>", ""},
     Command{"/wad-import", "Install a Doom-compatible WAD: /wad-import <path>", ""},
     Command{"/wemote", "Search and copy emoticons", "/wemote "},
@@ -38,11 +36,14 @@ inline constexpr std::array commands = {
     Command{"/config", "Appearance and configuration", ""},
     Command{"/config-save", "Save appearance preset", ""},
     Command{"/config-load", "Restore appearance preset", ""},
-    Command{"/help", "Commands and keyboard shortcuts", ""},
     Command{"/files", "Search indexed files and folders", ":"},
     Command{"/apps", "Search applications", ""},
     Command{"/web", "Search the web", "? "},
     Command{"/terminal", "Run a shell command", "> "},
+#ifdef __linux__
+    Command{"/manualpaste", "Type clipboard text after 3 seconds (Esc cancels)", ""},
+    Command{"/delaypress", "Schedule a keypress: /delaypress enter 20s (Esc cancels)", ""},
+#endif
     Command{"/jobs", "Show background commands", "<"},
     Command{"/index", "System-wide file index status", ""},
     Command{"/index-setup", "Set up the system file indexer", ""},

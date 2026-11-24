@@ -3,7 +3,7 @@ namespace notice {
 enum class Layout { compact, wide };
 struct Card {
     GtkWidget* window = nullptr;
-    std::string title, detail, icon;
+    std::string title, detail, icon, upcoming_key;
     bool side=false;
     Layout layout=Layout::compact;
     double progress=0, ring=0;
@@ -27,8 +27,46 @@ struct Card {
                 cairo_arc(cr,33,37,20,-G_PI/2,-G_PI/2+2*G_PI*ring);
                 theme_source_rgba(cr,.53,.90,.66,1); cairo_stroke(cr);
             }
-            draw_layout(cr,number?std::to_string(number):icon,26,24,"JetBrains Mono Bold 13",.80,.94,.84);
-            draw_layout(cr,title,65,16,"JetBrains Mono SemiBold 11",.80,.94,.84);
+            auto* marker=pango_cairo_create_layout(cr);
+            auto* marker_font=pango_font_description_from_string("JetBrains Mono Bold 13");
+            pango_layout_set_font_description(marker,marker_font);
+            pango_font_description_free(marker_font);
+            pango_layout_set_text(marker,(number?std::to_string(number):icon).c_str(),-1);
+            PangoRectangle ink{};
+            pango_layout_get_pixel_extents(marker,&ink,nullptr);
+            cairo_move_to(cr,33-ink.x-ink.width/2.,37-ink.y-ink.height/2.);
+            theme_source_rgba(cr,.80,.94,.84,1);
+            pango_cairo_show_layout(cr,marker);
+            const bool has_detail=number || !detail.empty();
+            const double title_center=has_detail ? 27 : h/2.;
+            auto* title_font=pango_font_description_from_string("JetBrains Mono SemiBold 11");
+            pango_layout_set_font_description(marker,title_font);
+            pango_font_description_free(title_font);
+            pango_layout_set_text(marker,title.c_str(),-1);
+            pango_layout_set_width(marker,(w-75)*PANGO_SCALE);
+            pango_layout_set_ellipsize(marker,PANGO_ELLIPSIZE_END);
+            pango_layout_get_pixel_extents(marker,&ink,nullptr);
+            cairo_move_to(cr,65,title_center-ink.y-ink.height/2.);
+            pango_cairo_show_layout(cr,marker);
+            if (number && !upcoming_key.empty()) {
+                int title_width;
+                pango_layout_get_pixel_size(marker,&title_width,nullptr);
+                const double x=65+title_width+7;
+                const int padding=6;
+                pango_layout_set_width(marker,-1);
+                pango_layout_set_text(marker,upcoming_key.c_str(),-1);
+                int key_width;
+                pango_layout_get_pixel_size(marker,&key_width,nullptr);
+                key_width=std::min(key_width,std::max(1,int(w-x-10-2*padding)));
+                pango_layout_set_width(marker,key_width*PANGO_SCALE);
+                pango_layout_get_pixel_extents(marker,&ink,nullptr);
+                rounded_rectangle(cr,x,title_center-11,key_width+2*padding,22,3);
+                theme_source_rgba(cr,.40,.54,.45,.56); cairo_set_line_width(cr,1); cairo_stroke(cr);
+                theme_source_rgba(cr,.80,.94,.84,1);
+                cairo_move_to(cr,x+padding,title_center-ink.y-ink.height/2.);
+                pango_cairo_show_layout(cr,marker);
+            }
+            g_object_unref(marker);
             if (number) {
                 rounded_rectangle(cr,65,41,31,17,3);
                 theme_source_rgba(cr,.40,.54,.45,1); cairo_set_line_width(cr,1); cairo_stroke(cr);
@@ -42,6 +80,8 @@ struct Card {
                 cairo_move_to(cr,21,12); cairo_line_to(cr,27,12);
                 cairo_move_to(cr,24,12); cairo_line_to(cr,24,16);
                 cairo_move_to(cr,24,19); cairo_line_to(cr,24,24); cairo_line_to(cr,28,26); cairo_stroke(cr);
+            } else if (icon=="clipboard") {
+                draw_clipboard_icon(cr,13,12,22);
             } else if (custom_icon) {
                 int iw=gdk_pixbuf_get_width(custom_icon),ih=gdk_pixbuf_get_height(custom_icon);
                 double ratio=22.0/std::max(iw,ih);
@@ -106,11 +146,17 @@ struct Timer {
     double dwell=0;
     bool hide_after=false;
     std::string key;
+    std::vector<kalwer::delaypress::Stroke> strokes;
+    std::size_t typed=0;
+    bool manual=false, send_escape=false;
+    std::optional<kalwer::delaypress::Stroke> delayed_stroke;
+    bool typing() const { return manual && deadline && typed>0; }
     void clear() {
         if(source) g_source_remove(source);
         source=0; deadline=0; ended=0; hide_after=false;
         top.close(); side.close(); g_clear_object(&top.custom_icon);
         input.reset(); g_clear_object(&monitor);
+        manual=false; send_escape=false; delayed_stroke.reset(); typed=0; strokes.clear();
     }
     void hide_parent() {
         top.close();
@@ -123,11 +169,17 @@ struct Timer {
     void outcome(bool cancel) {
         if (!deadline) return;
         deadline=0;
-        bool sent=!cancel && input.send();
+        if (send_escape) input.release_shortcut();
+        bool sent=!cancel && (manual?typed==strokes.size():delayed_stroke?input.send(*delayed_stroke):input.send());
         input.release_shortcut();
         ended=g_get_monotonic_time();
-        side.title=cancel?"Canceled":sent?key+" sent":"Keypress failed";
-        side.detail=cancel?key+" skipped":"";
+        if (manual) {
+            side.title=cancel?"Canceled":sent?"Text typed":"Typing failed";
+            side.detail=cancel && typed?"Stopped typing":"";
+        } else {
+            side.title=cancel?"Canceled":sent?key+" sent":"Keypress failed";
+            side.detail=cancel?key+" skipped":"";
+        }
         side.icon=cancel?"×":sent?"✓":"!";
         hide_parent();
     }
@@ -142,7 +194,10 @@ struct Timer {
         }
         if (deadline && now>=deadline) {
             // A user may have reopened the launcher during a long countdown.
-            outcome(gtk_window_is_active(GTK_WINDOW(state.window)) && gtk_widget_get_visible(state.window));
+            if (gtk_window_is_active(GTK_WINDOW(state.window)) && gtk_widget_get_visible(state.window)) outcome(true);
+            else if (!manual) outcome(false);
+            else if (!input.send(strokes[typed])) outcome(false);
+            else if (++typed==strokes.size()) outcome(false);
         }
         if (deadline || ended) {
             double left=(deadline-now)/1e6;
@@ -154,8 +209,13 @@ struct Timer {
                 if (ended) {
                     side.number=0; side.ring=1;
                     side.progress=ease((1.15-(now-ended)/1e6)/.18);
+                } else if (manual && left<=0) {
+                    side.title="Typing clipboard"; side.detail="Esc to stop";
+                    side.number=0; side.icon="…"; side.ring=double(typed)/strokes.size();
+                    side.progress=1;
                 } else {
-                    side.title="Pressing "+key;
+                    side.title=manual?"Typing clipboard":"Pressing";
+                    side.upcoming_key=manual?"":key;
                     side.number=std::max(1,int(std::ceil(left))); side.ring=std::clamp(left/3.,0.,1.);
                     side.progress=ease(std::min(age,3-left)/.18);
                 }
@@ -166,7 +226,7 @@ struct Timer {
     static double ease(double v) { return (1-std::cos(G_PI*std::clamp(v,0.,1.)))/2; }
     void open_top(Layout layout,const std::string& message,const std::string& image) {
         top.layout=layout; top.title=message; top.icon=image; top.progress=0;
-        if (!image.empty() && image!="timer" && image!="kalwer") {
+        if (!image.empty() && image!="timer" && image!="kalwer" && image!="clipboard") {
             if (g_path_is_absolute(image.c_str()))
                 top.custom_icon=gdk_pixbuf_new_from_file_at_scale(image.c_str(),64,64,TRUE,nullptr);
             else top.custom_icon=gtk_icon_theme_load_icon(state.icon_theme,image.c_str(),48,GTK_ICON_LOOKUP_FORCE_SIZE,nullptr);
@@ -205,24 +265,58 @@ inline void cancel() {
     if (timer.source) g_source_remove(timer.source);
     timer.source=g_timeout_add(1,tick,nullptr);
 }
-inline void start(const std::string& command) {
-    if (timer.deadline && timer.hide_after) return;
-    if (timer.deadline && !kalwer::delaypress::parse(command)) return;
+inline void start(const std::string& command, const char* clipboard=nullptr,
+                  gint64 submitted=0, int group=0) {
+    const bool manual=command=="/manualpaste";
+    if (timer.deadline && (timer.hide_after || timer.typing())) return;
+    auto request=manual?std::optional{kalwer::delaypress::Request{kalwer::delaypress::keys[0],3}}
+                       :kalwer::delaypress::parse(command);
+    if (timer.deadline && !request) return;
     timer.clear();
-    timer.start=g_get_monotonic_time();
+    timer.start=submitted?submitted:g_get_monotonic_time();
     timer.monitor=kalwer::popup_monitor(GTK_WINDOW(state.window));
     if (!timer.monitor) return;
     g_object_ref(timer.monitor); gdk_monitor_get_workarea(timer.monitor,&timer.area);
-    auto request=kalwer::delaypress::parse(command);
-    std::string error=request?timer.input.arm(request->key,cancel):"Use /delaypress enter 20s";
+    std::string error;
+    if (manual) {
+        if (!clipboard || !*clipboard) error="Clipboard has no text";
+        else if (auto strokes=kalwer::delaypress::text_strokes(clipboard,group); strokes && !strokes->empty())
+            timer.strokes=std::move(*strokes);
+        else error="Text needs a different keyboard layout";
+    }
+    if (!request) error="Use /delaypress enter 20s or a mapped key";
+    if (request && request->stroke) {
+        timer.delayed_stroke=request->stroke;
+        timer.strokes.push_back(*request->stroke);
+    }
+    if (error.empty()) error=timer.input.arm(request->key,cancel,timer.strokes);
     if (!error.empty()) {
         timer.dwell=2.4; timer.open_top(Layout::wide,error,"kalwer");
     } else {
-        timer.key=request->key.name; timer.deadline=timer.start+gint64(request->seconds)*G_USEC_PER_SEC;
+        timer.manual=manual;
+        timer.send_escape=request->key.keysym==GDK_KEY_Escape;
+        timer.key=manual?"Clipboard":request->label.empty()?request->key.name:request->label; timer.deadline=timer.start+gint64(request->seconds)*G_USEC_PER_SEC;
         timer.hide_after=true; timer.dwell=std::min(1.65,request->seconds-.40);
-        timer.open_top(state.notice_wide?Layout::wide:Layout::compact,"",state.notice_icon);
+        timer.open_top(state.notice_wide?Layout::wide:Layout::compact,"",manual?"clipboard":state.notice_icon);
     }
     timer.update();
     timer.source=g_timeout_add(16,tick,nullptr);
+}
+inline void manualpaste() {
+    static guint request=0;
+    struct Pending { guint id; int group; gint64 submitted; };
+    int group=0;
+    if (auto* event=gtk_get_current_event()) {
+        if (event->type==GDK_KEY_PRESS) group=event->key.group;
+        gdk_event_free(event);
+    }
+    gtk_clipboard_request_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),
+        +[](GtkClipboard*,const gchar* text,gpointer data) {
+            auto* pending=static_cast<Pending*>(data);
+            if (request==pending->id && state.window && gtk_widget_get_visible(state.window) &&
+                !state.closing && std::string(gtk_entry_get_text(GTK_ENTRY(state.entry)))=="/manualpaste")
+                start("/manualpaste",text,pending->submitted,pending->group);
+            delete pending;
+        },new Pending{++request,group,g_get_monotonic_time()});
 }
 }
