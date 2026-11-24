@@ -41,6 +41,8 @@
 #include <utility>
 #include <vector>
 
+#include "delaypress_input.hpp"
+
 extern "C" {
 extern const unsigned char _binary_build_koom_kalwer_koom_start[],_binary_build_koom_kalwer_koom_end[];
 }
@@ -53,6 +55,7 @@ void theme_source_rgba(cairo_t* cr,double r,double g,double b,double a) {
 
 constexpr int kWindowWidth = 650;
 constexpr int kWindowHeight = 632;
+constexpr double kBarOutline = 2.0;
 constexpr double kSearchX = 15.0;
 constexpr double kSearchY = 12.0;
 constexpr double kSearchWidth = 620.0;
@@ -69,9 +72,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.2+local.1";
+constexpr const char* kKalwerVersion = "0.13.3+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.2";
+constexpr const char* kKalwerVersion = "0.13.3";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -178,6 +181,11 @@ struct State {
     guint command_serial = 0;
     std::vector<CommandJob> jobs;
     gint64 hidden_us = 0;
+    bool hide_on_blur = false, notice_wide = false;
+    guint blur_source = 0;
+    double notice_outline = kBarOutline;
+    std::string notice_icon = "timer";
+    GtkWidget *settings_blur=nullptr, *settings_notice_wide=nullptr, *settings_outline=nullptr, *settings_notice_icon=nullptr;
     double prompt_retention_ms = 3000.0;
     double popup_line_ms = 220.0;
     double popup_expand_ms = 390.0;
@@ -567,6 +575,15 @@ void load_settings() {
                                    nullptr);
     GKeyFile* file = g_key_file_new();
     if (g_key_file_load_from_file(file, path, G_KEY_FILE_NONE, nullptr)) {
+        state.hide_on_blur=g_key_file_get_boolean(file,"launcher","hide_on_focus_loss",nullptr);
+        state.notice_wide=g_key_file_get_boolean(file,"notification","wide",nullptr);
+        GError* outline_error=nullptr;
+        double outline=g_key_file_get_double(file,"notification","outline",&outline_error);
+        if (!outline_error && std::isfinite(outline)) state.notice_outline=std::clamp(outline,1.,8.);
+        g_clear_error(&outline_error);
+        if (auto* icon=g_key_file_get_string(file,"notification","delaypress_icon",nullptr)) {
+            state.notice_icon=icon; g_free(icon);
+        }
         state.prompt_retention_ms = bounded_setting(
             file, "prompt_retention_ms", 3000.0, 0.0, 30000.0);
         state.popup_line_ms = bounded_setting(
@@ -589,6 +606,10 @@ void save_settings() {
     }
     gchar* path = g_build_filename(directory, "settings-v1.ini", nullptr);
     GKeyFile* file = g_key_file_new();
+    g_key_file_set_boolean(file,"launcher","hide_on_focus_loss",state.hide_on_blur);
+    g_key_file_set_boolean(file,"notification","wide",state.notice_wide);
+    g_key_file_set_double(file,"notification","outline",state.notice_outline);
+    g_key_file_set_string(file,"notification","delaypress_icon",state.notice_icon.c_str());
     g_key_file_set_double(file, "timing", "prompt_retention_ms",
                           state.prompt_retention_ms);
     g_key_file_set_double(file, "timing", "popup_line_ms", state.popup_line_ms);
@@ -825,7 +846,7 @@ void draw_search(cairo_t* cr) {
     rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, search_height(), 12);
     theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
     cairo_fill_preserve(cr);
-    cairo_set_line_width(cr, 2.0);
+    cairo_set_line_width(cr, kBarOutline);
     theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.86);
     cairo_stroke(cr);
 
@@ -1413,9 +1434,11 @@ void schedule_query(guint delay_ms) {
 
 void ensure_animation();
 
+#include "notification_gtk.hpp"
+
 void finish_hide_kalwer() {
     state.closing = false;
-    if (state.resident && state.window) {
+    if ((state.resident || notice::timer.source) && state.window) {
         gtk_widget_hide(state.window);
     } else if (state.app) {
         g_application_quit(G_APPLICATION(state.app));
@@ -2542,10 +2565,14 @@ void clear_settings_widgets() {
 
 void close_settings_window() {
     if (state.settings_window) gtk_widget_destroy(state.settings_window);
-    if (!state.resident && state.app) g_application_quit(G_APPLICATION(state.app));
+    if (!state.resident && !notice::timer.source && state.app) g_application_quit(G_APPLICATION(state.app));
 }
 
 void save_settings_window(GtkButton*, gpointer) {
+    state.hide_on_blur=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state.settings_blur));
+    state.notice_wide=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state.settings_notice_wide));
+    state.notice_outline=gtk_spin_button_get_value(GTK_SPIN_BUTTON(state.settings_outline));
+    state.notice_icon=gtk_entry_get_text(GTK_ENTRY(state.settings_notice_icon));
     state.prompt_retention_ms = gtk_spin_button_get_value(
         GTK_SPIN_BUTTON(state.settings_prompt_retention));
     state.popup_line_ms = gtk_spin_button_get_value(
@@ -2684,6 +2711,17 @@ void show_settings_window() {
     add_settings_row(grid,10,"KEEP KALWER HALFTONE","Combine halftone transparency with a dither",state.settings_keep_halftone);
     state.settings_popup_halftone=gtk_check_button_new();gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_popup_halftone),kalwer::appearance.popup_keep_halftone);
     add_settings_row(grid,11,"KEEP POPUP HALFTONE","Combine halftone transparency with a dither",state.settings_popup_halftone);
+    state.settings_blur=gtk_check_button_new();
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_blur),state.hide_on_blur);
+    add_settings_row(grid,12,"HIDE ON FOCUS LOSS","Dismiss the launcher when you switch apps",state.settings_blur);
+    state.settings_notice_wide=gtk_check_button_new();
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.settings_notice_wide),state.notice_wide);
+    add_settings_row(grid,13,"WIDE DELAYPRESS POPUP","Center the countdown across the search bar",state.settings_notice_wide);
+    state.settings_outline=settings_spin(state.notice_outline,1,8,1,1);
+    add_settings_row(grid,14,"NOTIFICATION OUTLINE","Width in logical pixels",state.settings_outline);
+    state.settings_notice_icon=gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(state.settings_notice_icon),state.notice_icon.c_str());
+    add_settings_row(grid,15,"DELAYPRESS ICON","timer, an icon name, or an image path (empty: Kalwer)",state.settings_notice_icon);
     auto* scroll=gtk_scrolled_window_new(nullptr,nullptr);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
     gtk_widget_set_size_request(scroll,-1,400);gtk_container_add(GTK_CONTAINER(scroll),grid_widget);gtk_box_pack_start(GTK_BOX(outer),scroll,TRUE,TRUE,0);
     GtkWidget* config_hint=gtk_label_new("/config-save and /config-load save and restore your preset");
@@ -2729,7 +2767,10 @@ void activate_selection(bool elevated = false) {
     }
     if (result.provider == "kalwer-slash") {
         const auto& name = result.identifier;
-        if (name == "/file" || name=="/memes" || name=="/binup") {
+        if (name == "/delaypress") {
+            notice::start(gtk_entry_get_text(GTK_ENTRY(state.entry)));
+        }
+        else if (name == "/file" || name=="/memes" || name=="/binup") {
             auto input=std::string(gtk_entry_get_text(GTK_ENTRY(state.entry)));
             open_popup({name,input.size()>name.size()?trim_copy(input.substr(name.size())):std::string{}},{},std::nullopt,false,true);
             stop_query(); state.opening=state.closing=false; gtk_widget_hide(state.window);
@@ -3338,7 +3379,7 @@ void on_entry_changed(GtkEditable*, gpointer) {
         std::vector<Result> commands;
         for (const auto* c : kalwer::matching_commands(input)) {
             Result r; r.identifier = c->name; r.text = c->name; r.subtext = c->description;
-            r.provider = "kalwer-slash"; r.icon = "utilities-terminal";
+            r.provider = "kalwer-slash"; r.icon = c->name=="/delaypress" ? "preferences-system-time" : "utilities-terminal";
             commands.push_back(std::move(r));
         }
         show_local_results(std::move(commands));
@@ -3411,7 +3452,7 @@ gboolean on_button(GtkWidget*, GdkEventButton* event, gpointer) {
 }
 
 gboolean focus_kalwer(gpointer) {
-    if (!state.window || !gtk_widget_get_visible(state.window) || state.output_window) {
+    if (!state.window || !gtk_widget_get_visible(state.window) || state.closing || state.blur_source || state.output_window) {
         return G_SOURCE_REMOVE;
     }
     const char* selector = "title:^Kalwer$";
@@ -3517,7 +3558,7 @@ void activate(GtkApplication* app, gpointer) {
     start_update_check();
     g_timeout_add(30, poll_files, nullptr);
     g_timeout_add_seconds(1, +[](gpointer) -> gboolean {
-        if (!update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() || notes_busy || notes_login_window || kalwer::files::window ||
+        if (notice::timer.source || !update_ready || update_status.checking() || update_restart_path.empty() || state.output_window || file_index.busy() || notes_busy || notes_login_window || kalwer::files::window ||
             (state.window && gtk_widget_get_visible(state.window)) || state.settings_window) return G_SOURCE_CONTINUE;
         for (const auto& job : state.jobs) {
             int status = 0;
@@ -3541,6 +3582,24 @@ void activate(GtkApplication* app, gpointer) {
         return G_SOURCE_CONTINUE;
     }, nullptr);
     state.window = gtk_application_window_new(app);
+    g_signal_connect(state.window,"focus-out-event",G_CALLBACK(+[](GtkWidget*,GdkEventFocus*,gpointer)->gboolean {
+        if (!state.hide_on_blur || state.blur_source) return FALSE;
+        state.blur_source=g_timeout_add(40,+[](gpointer)->gboolean {
+            state.blur_source=0;
+            if (!state.window || !gtk_widget_get_visible(state.window) || !state.hide_on_blur) return G_SOURCE_REMOVE;
+            GList* windows=gtk_window_list_toplevels();
+            bool owned_focus=false;
+            for (GList* it=windows;it;it=it->next)
+                if (gtk_window_is_active(GTK_WINDOW(it->data))) { owned_focus=true; break; }
+            g_list_free(windows);
+            if (!owned_focus) {
+                if (notice::timer.hide_after) notice::timer.hide_parent();
+                else hide_kalwer();
+            }
+            return G_SOURCE_REMOVE;
+        },nullptr);
+        return FALSE;
+    }),nullptr);
     gtk_window_set_title(GTK_WINDOW(state.window), "Kalwer");
     gtk_window_set_icon_name(GTK_WINDOW(state.window), "kalwer");
     gtk_window_set_default_size(GTK_WINDOW(state.window), kWindowWidth, kWindowHeight);
@@ -3633,6 +3692,8 @@ void activate(GtkApplication* app, gpointer) {
 }
 
 void cleanup() {
+    if (state.blur_source) g_source_remove(state.blur_source);
+    notice::timer.clear();
     stop_query();
     if (state.query_delay_source) g_source_remove(state.query_delay_source);
     invalidate_surfaces();

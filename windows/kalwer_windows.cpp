@@ -89,7 +89,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.13.2";
+constexpr wchar_t kKalwerVersion[] = L"0.13.3";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -1642,16 +1642,7 @@ std::unique_ptr<CommandJob> create_command_job(const std::wstring& command) {
 }
 
 bool copy_text_to_clipboard(const std::wstring& text) {
-    if(!OpenClipboard(state.window))return false;
-    bool copied=false;const size_t bytes=(text.size()+1)*sizeof(wchar_t);
-    if(HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE,bytes)) {
-        if(void* destination=GlobalLock(memory)) {
-            std::memcpy(destination,text.c_str(),bytes);GlobalUnlock(memory);
-            if(EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,memory))copied=true;
-        }
-        if(!copied)GlobalFree(memory);
-    }
-    CloseClipboard();return copied;
+    return kalwer::winfiles::copy_text_to_clipboard(state.window, text);
 }
 
 std::wstring clipboard_text() {

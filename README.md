@@ -14,6 +14,7 @@ comes from the finished launcher below it.
 ## Features
 
 - Native Unicode lookup (`+200b`, `+zero`), emoticon search (`/wemote`), and SSH host search (`/wssh`).
+- Linux `/delaypress enter 20s` sends Enter to the focused app 20 seconds after submission. Esc cancels at any point. The warning slides in three seconds before delivery. Supported keys include Enter, Tab, Space, Backspace, Home, End and the four arrows. KDE Wayland uses the session shortcut service and write access to `/dev/uinput`. X11 uses XTest when available at build time. In `/config`, choose compact or wide, set the notification outline or icon, and optionally hide the launcher when it loses focus.
 - Linux `/file [path]`: opens Downloads in Kalwer’s terminal popup with a thumbnail browser sorted by modification date (newest first; Downloads mixes files and folders), file previews, drag/copy attachments, and saved folder bookmarks. Enter opens a selection; Ctrl+C copies a selected file without opening it; Escape or × returns from preview. Typing searches filenames; Ctrl+F focuses search and Ctrl+L edits the path. Popup backgrounds use the configured opacity and cached halftone/dither transparency masks, keeping labels and thumbnails sharp. Tiles are built incrementally and visible thumbnails load with at most two concurrent jobs. Images and cached desktop thumbnails are shown; text previews show the first 64 KiB.
 - System-wide `:` file search through Everything on Windows and plocate on Linux.
 - GPU-backed, animated halftone coverage over the fully rendered interface.
@@ -555,7 +556,7 @@ done notes remain readable. Existing notes are read-only in Kalwer; edit them on
 the website. Windows and Android do not yet implement the `*` notes commands.
 
 For local development installations, build with `make LOCAL_BUILD=1`. This marks
-the Linux build `0.12.0+local.1` and pauses automatic binary replacement so a
+the Linux build with a `+local.1` suffix and pauses automatic binary replacement so a
 published release cannot silently remove local features. `/updates` explains
 this state. Normal release builds retain automatic updates. After switching
 build flags, remove `elephant-field` before rebuilding.

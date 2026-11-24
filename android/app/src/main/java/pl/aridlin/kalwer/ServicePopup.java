@@ -397,9 +397,11 @@ final class ServicePopup extends Dialog {
              -> api.download(activity,
                              ServiceApi.media(item.getString("url"), memes),
                              item.getString("name"), 200L * 1024 * 1024),
-         value -> preview((File)value, item.optString("name")));
+         value -> preview((File)value, item.optString("name"),
+                          !memes && item.optBoolean(
+                              "text", item.optString("mime").startsWith("text/"))));
   }
-  void preview(File file, String name) throws Exception {
+  void preview(File file, String name, boolean binText) {
     stopVideo();
     preview = true;
     body.removeAllViews();
@@ -410,8 +412,8 @@ final class ServicePopup extends Dialog {
     String mime = activity.getContentResolver().getType(uri);
     TextView title = text(name, 13);
     body.addView(title);
-    if (mime.startsWith("video/") ||
-        name.toLowerCase(Locale.ROOT).endsWith(".gif")) {
+    if (!binText && (mime.startsWith("video/") ||
+                     name.toLowerCase(Locale.ROOT).endsWith(".gif"))) {
       if (mime.startsWith("video/")) {
         video = new VideoView(activity);
         video.setVideoURI(uri);
@@ -425,14 +427,14 @@ final class ServicePopup extends Dialog {
         body.addView(video, new LinearLayout.LayoutParams(-1, 0, 1));
       } else
         image(file);
-    } else if (mime.startsWith("image/"))
+    } else if (!binText && mime.startsWith("image/"))
       image(file);
     else {
       TextView content = text("", 13);
       ScrollView scroll = new ScrollView(activity);
       scroll.addView(content);
       body.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-      if (mime.startsWith("text/") || name.endsWith(".txt")) {
+      if (binText || mime.startsWith("text/") || name.endsWith(".txt")) {
         task(() -> {
           try (InputStream in = new FileInputStream(file)) {
             byte[] bytes = new byte[65536];
@@ -450,10 +452,31 @@ final class ServicePopup extends Dialog {
     LinearLayout buttons = new LinearLayout(activity);
     buttons.addView(button("Back", this::gallery));
     buttons.addView(button("Copy", () -> {
-      ((ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE))
-          .setPrimaryClip(
-              ClipData.newUri(activity.getContentResolver(), name, uri));
-      status.setText("Copied.");
+      if (binText) {
+        task(() -> {
+          // Keep the text comfortably below the Android Binder transaction limit.
+          int limit = 256 * 1024;
+          try (InputStream in = new FileInputStream(file)) {
+            byte[] bytes = new byte[limit + 1];
+            int used = 0, n;
+            while (used < bytes.length &&
+                   (n = in.read(bytes, used, bytes.length - used)) != -1)
+              used += n;
+            if (used > limit)
+              throw new IOException("This text is too large to copy.");
+            int offset = used >= 3 && bytes[0] == (byte)0xef &&
+                                 bytes[1] == (byte)0xbb && bytes[2] == (byte)0xbf
+                             ? 3
+                             : 0;
+            return new String(bytes, offset, used - offset,
+                              java.nio.charset.StandardCharsets.UTF_8);
+          }
+        }, value -> {
+          if (buttons.isAttachedToWindow())
+            copy(ClipData.newPlainText(name, (String)value));
+        });
+      } else
+        copy(ClipData.newUri(activity.getContentResolver(), name, uri));
     }));
     buttons.addView(button("Share", () -> {
       Intent send = new Intent(Intent.ACTION_SEND)
@@ -466,6 +489,11 @@ final class ServicePopup extends Dialog {
     }));
     body.addView(buttons);
     hideKeyboard();
+  }
+  void copy(ClipData clip) {
+    ((ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE))
+        .setPrimaryClip(clip);
+    status.setText("Copied.");
   }
   void image(File file) {
     ImageView image = new ImageView(activity);

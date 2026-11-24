@@ -157,6 +157,7 @@ struct Http {
 struct Item {
   std::string id, name, category, kind, url, thumbnail;
   guint64 modified = 0, size = 0;
+  bool textual = false;
 };
 struct Page {
   std::vector<Item> items;
@@ -343,6 +344,9 @@ inline Page bin_items(GCancellable *cancel = nullptr) {
                 : mime.starts_with("video/") ? "video"
                 : mime.starts_with("text/")  ? "text"
                                              : "file";
+    item.textual = json_object_has_member(row, "text")
+                       ? json_object_get_boolean_member(row, "text")
+                       : item.kind == "text";
     item.url = safe_media(bin_base, field(row, "url"));
     if (item.kind == "image" && item.size < 8 * 1024 * 1024)
       item.thumbnail = item.url;

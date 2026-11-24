@@ -128,6 +128,50 @@ public final class MobileFeaturesTest
         found = true;
     assertTrue("Kalwer must be a share target", found);
   }
+  public void testBinUpCopyUsesFullPlainText() throws Throwable {
+    MainActivity activity = getActivity();
+    var dir = new java.io.File(activity.getCacheDir(), "service-media");
+    dir.mkdirs();
+    var fixture = java.io.File.createTempFile("binup-copy-", ".json", dir);
+    char[] extra = new char[70000];
+    java.util.Arrays.fill(extra, 'x');
+    String expected = "Zażółć gęślą jaźń 😀\nПривет\n" + new String(extra) + "\n";
+    try (var out = new java.io.FileOutputStream(fixture)) {
+      out.write(("\ufeff" + expected)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    ServicePopup[] popup = new ServicePopup[1];
+    try {
+      runTestOnUiThread(() -> {
+        popup[0] = new ServicePopup(
+            activity, activity.getSharedPreferences("kalwer", 0), false, null,
+            () -> {});
+        popup[0].show();
+        popup[0].preview(fixture, "fixture.json", true);
+      });
+      waitFor(() -> popup[0].getWindow().getDecorView().hasWindowFocus() &&
+                    !popup[0].busy);
+      runTestOnUiThread(() -> {
+        var matches = new java.util.ArrayList<View>();
+        popup[0].body.findViewsWithText(matches, "Copy", View.FIND_VIEWS_WITH_TEXT);
+        assertEquals(1, matches.size());
+        assertTrue(matches.get(0).performClick());
+      });
+      waitFor(() -> "Copied.".contentEquals(popup[0].status.getText()));
+      runTestOnUiThread(() -> {
+        ClipboardManager clipboard = (ClipboardManager)activity.getSystemService(
+            Context.CLIPBOARD_SERVICE);
+        ClipData clip = clipboard.getPrimaryClip();
+        assertTrue(clip.getDescription().hasMimeType("text/plain"));
+        assertNull(clip.getItemAt(0).getUri());
+        assertEquals(expected, clip.getItemAt(0).getText().toString());
+      });
+    } finally {
+      if (popup[0] != null)
+        runTestOnUiThread(() -> popup[0].dismiss());
+      fixture.delete();
+    }
+  }
   public void testUnicodeAndSharedEmoticons() throws Exception {
     CountDownLatch loaded = new CountDownLatch(1);
     TextTools.load(getActivity(), loaded::countDown);

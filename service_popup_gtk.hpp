@@ -2,6 +2,7 @@
 #include "file_browser_gtk.hpp"
 #include <map>
 #include <memory>
+#include <string_view>
 namespace kalwer::services {
 struct Popup : std::enable_shared_from_this<Popup> {
   GtkWidget *host, *root, *controls, *category = nullptr, *upload_box = nullptr;
@@ -211,39 +212,55 @@ struct Popup : std::enable_shared_from_this<Popup> {
   void open(const std::string &path, bool copy) {
     if (path.empty())
       return;
-    if (g_file_test(path.c_str(), G_FILE_TEST_IS_REGULAR)) {
+    auto found = records.find(path);
+    const bool cached = g_file_test(path.c_str(), G_FILE_TEST_IS_REGULAR);
+    const bool copy_text =
+        copy && !meme && found != records.end() && found->second.textual;
+    if (cached && !copy_text) {
       if (copy)
         files::copy_path(path);
       else
         files::show_file(path);
       return;
     }
-    auto found = records.find(path);
-    if (found == records.end())
-      return;
-    auto item = found->second;
-    if (busy)
+    if (found == records.end() || busy)
       return;
     busy = true;
-    status("Downloading…");
+    status(cached ? "Loading…" : "Downloading…");
+    auto item = found->second;
     auto result = std::make_shared<std::string>();
-    auto token = cancel;
-    g_object_ref(token);
+    auto text = std::make_shared<std::string>();
+    auto token = std::shared_ptr<GCancellable>(
+        G_CANCELLABLE(g_object_ref(cancel)), g_object_unref);
     async(
-        [result, item, token] {
-          try {
-            *result =
-                download(item.url, item.name, 1024ULL * 1024 * 1024, token);
-          } catch (...) {
-            g_object_unref(token);
-            throw;
+        [result, text, item, path, cached, copy_text, token] {
+          *result = cached ? path : download(item.url, item.name,
+                                              1024ULL * 1024 * 1024, token.get());
+          if (copy_text) {
+            char *contents = nullptr;
+            gsize length = 0;
+            if (!g_file_get_contents(result->c_str(), &contents, &length, nullptr))
+              throw std::runtime_error("Could not read this text.");
+            std::unique_ptr<char, decltype(&g_free)> bytes(contents, g_free);
+            std::string_view source(contents, length);
+            if (source.starts_with("\xef\xbb\xbf"))
+              source.remove_prefix(3);
+            if (g_utf8_validate(source.data(), source.size(), nullptr))
+              text->assign(source);
+            else {
+              std::unique_ptr<char, decltype(&g_free)> valid(
+                  g_utf8_make_valid(source.data(), source.size()), g_free);
+              text->assign(valid.get());
+            }
           }
-          g_object_unref(token);
         },
-        [self = shared_from_this(), result, copy] {
+        [self = shared_from_this(), result, text, copy, copy_text] {
           self->status("");
           self->enable_drag(*result);
-          if (copy)
+          if (copy_text)
+            gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),
+                                   text->c_str(), text->size());
+          else if (copy)
             files::copy_path(*result);
           else
             files::show_file(*result);

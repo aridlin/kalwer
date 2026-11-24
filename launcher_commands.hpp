@@ -8,6 +8,9 @@ namespace kalwer {
 struct PopupDocument { std::string title, body; };
 struct Command { std::string_view name, description, replacement; };
 inline constexpr std::array commands = {
+#ifdef __linux__
+    Command{"/delaypress", "Schedule a keypress: /delaypress enter 20s (Esc cancels)", ""},
+#endif
     Command{"/kar-import", "Install Kar artwork: /kar-import <path to art.karp>", ""},
     Command{"/wad-import", "Install a Doom-compatible WAD: /wad-import <path>", ""},
     Command{"/wemote", "Search and copy emoticons", "/wemote "},
@@ -57,7 +60,7 @@ inline std::vector<const Command*> matching_commands(std::string prefix) {
     if(prefix=="/unlockall"){matches.push_back(&unlock);return matches;}
     if(prefix=="/doom"){matches.push_back(&secret);return matches;}
     if (!prefix.empty() && prefix.front() == '/')
-        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/file" || command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {
+        for (const auto& command : commands) if (command.name.starts_with(prefix) || ((command.name=="/delaypress" || command.name=="/file" || command.name=="/wad-import" || command.name=="/kar-import") && prefix.starts_with(std::string(command.name)+" "))) {
             if(command.name==prefix)matches.insert(matches.begin(),&command);
             else matches.push_back(&command);
         }

@@ -433,6 +433,47 @@ inline void copy(const fs::path &path) {
   if (FAILED(ok))
     throw std::runtime_error("Clipboard is unavailable.");
 }
+inline bool copy_text_to_clipboard(HWND owner, const std::wstring &text) {
+  if (!OpenClipboard(owner))
+    return false;
+  bool copied = false;
+  const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+  if (auto memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+    if (auto destination = GlobalLock(memory)) {
+      std::memcpy(destination, text.c_str(), bytes);
+      GlobalUnlock(memory);
+      copied = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory);
+    }
+    if (!copied)
+      GlobalFree(memory);
+  }
+  CloseClipboard();
+  return copied;
+}
+inline std::wstring decode_text(std::string text) {
+  if (text.starts_with("\xef\xbb\xbf"))
+    text.erase(0, 3);
+  if (text.starts_with("\xff\xfe") || text.starts_with("\xfe\xff")) {
+    bool little = text.starts_with("\xff\xfe");
+    std::wstring decoded;
+    decoded.reserve((text.size() - 2) / 2);
+    for (size_t i = 2; i + 1 < text.size(); i += 2) {
+      auto low = static_cast<unsigned char>(text[i + !little]);
+      auto high = static_cast<unsigned char>(text[i + little]);
+      decoded += wchar_t(low | (high << 8));
+    }
+    return decoded;
+  }
+  auto decoded = wide(text);
+  if (decoded.empty() && !text.empty()) {
+    int count = MultiByteToWideChar(CP_ACP, 0, text.data(), int(text.size()),
+                                    nullptr, 0);
+    decoded.resize(count);
+    MultiByteToWideChar(CP_ACP, 0, text.data(), int(text.size()), decoded.data(),
+                        count);
+  }
+  return decoded;
+}
 inline void drag(const fs::path &path) {
   auto data = object(path);
   if (!data)
@@ -564,6 +605,7 @@ struct Entry {
   bool folder = false;
   std::uint64_t date = 0, size = 0;
   std::string url, thumb, kind;
+  bool bin_text = false;
 };
 inline void sort_entries(std::vector<Entry> &out, bool mixed) {
   std::stable_sort(out.begin(), out.end(), [mixed](auto &a, auto &b) {
@@ -585,7 +627,7 @@ struct Panel : std::enable_shared_from_this<Panel> {
   std::atomic<bool> alive = true;
   bool reload_requested = false;
   bool busy = false, preview = false, choosing = false, review = false,
-       meme = false;
+       meme = false, preview_bin_text = false;
   std::string service, query, service_query, cat = "all", message;
   std::vector<std::string> categories;
   std::vector<Entry> entries;
@@ -832,6 +874,9 @@ struct Panel : std::enable_shared_from_this<Panel> {
             e.url = media(row.at("url").get<std::string>(), p.meme);
             e.thumb = row.value("thumbnail", "");
             e.kind = row.value("kind", row.value("mime", "file"));
+            e.bin_text = !p.meme &&
+                         row.value("text", e.kind == "text" ||
+                                               e.kind.starts_with("text/"));
             e.date = row.value("mtime", std::uint64_t(0));
             e.size = row.value("size", std::uint64_t(0));
             e.path = cached_path(e.url, utf8(e.name));
@@ -905,22 +950,24 @@ struct Panel : std::enable_shared_from_this<Panel> {
       preview = false;
       return;
     }
+    bool bin_text = item.bin_text;
     if (!fs::exists(item.path) && !item.url.empty()) {
       run(
           [item](Http &h) {
             return download(h, item.url, utf8(item.name), 1073741824);
           },
-          [](Panel &p, fs::path path) { p.show(path); });
+          [bin_text](Panel &p, fs::path path) { p.show(path, bin_text); });
       return;
     }
-    show(item.path);
+    show(item.path, bin_text);
   }
-  void show(fs::path path) {
+  void show(fs::path path, bool bin_text = false) {
     video.reset();
     animation.reset();
     gif_limited_reported = false;
     selected = path;
     preview = true;
+    preview_bin_text = bin_text;
     review = false;
     preview_text.clear();
     text_scroll = 0;
@@ -930,33 +977,13 @@ struct Panel : std::enable_shared_from_this<Panel> {
     if (ext == L".mp4" || ext == L".webm" || ext == L".mov" || ext == L".avi" ||
         ext == L".mkv" || ext == L".mp3" || ext == L".wav")
       video = std::make_unique<kalwer::winmedia::Player>(owner, path);
-    if (ext == L".txt" || ext == L".md" || ext == L".json" || ext == L".csv" ||
-        ext == L".log") {
+    if (bin_text || ext == L".txt" || ext == L".md" || ext == L".json" ||
+        ext == L".csv" || ext == L".log") {
       std::ifstream in(path, std::ios::binary);
       std::string text(65536, ' ');
       in.read(text.data(), text.size());
       text.resize(size_t(in.gcount()));
-      if (text.starts_with("\xef\xbb\xbf"))
-        text.erase(0, 3);
-      if (text.size() >= 2 &&
-          ((unsigned char)text[0] == 255 && (unsigned char)text[1] == 254 ||
-           (unsigned char)text[0] == 254 && (unsigned char)text[1] == 255)) {
-        bool little = (unsigned char)text[0] == 255;
-        for (size_t i = 2; i + 1 < text.size(); i += 2)
-          preview_text += wchar_t(
-              little
-                  ? (unsigned char)text[i] | ((unsigned char)text[i + 1] << 8)
-                  : (unsigned char)text[i + 1] | ((unsigned char)text[i] << 8));
-      } else {
-        preview_text = wide(text);
-        if (preview_text.empty() && !text.empty()) {
-          int count = MultiByteToWideChar(CP_ACP, 0, text.data(),
-                                          int(text.size()), nullptr, 0);
-          preview_text.resize(count);
-          MultiByteToWideChar(CP_ACP, 0, text.data(), int(text.size()),
-                              preview_text.data(), count);
-        }
-      }
+      preview_text = decode_text(std::move(text));
     } else {
       run([path](Http &) { return thumbnail(path, 1280); },
           [path](Panel &p, std::shared_ptr<Bitmap> bitmap) {
@@ -997,24 +1024,35 @@ struct Panel : std::enable_shared_from_this<Panel> {
     } else
       close();
   }
+  void copy_bin_text(fs::path path, std::string url = {}, std::string name = {}) {
+    run(
+        [path, url, name](Http &h) {
+          auto file = !url.empty() ? download(h, url, name, 1073741824) : path;
+          std::ifstream in(file, std::ios::binary | std::ios::ate);
+          auto size = in.tellg();
+          if (size < 0 || size > 1073741824)
+            throw std::runtime_error("Could not read this text.");
+          std::string text(static_cast<size_t>(size), '\0');
+          in.seekg(0);
+          if (!in.read(text.data(), text.size()))
+            throw std::runtime_error("Could not read this text.");
+          return decode_text(std::move(text));
+        },
+        [](Panel &p, std::wstring text) {
+          p.message = copy_text_to_clipboard(p.owner, text)
+                          ? "Copied."
+                          : "Clipboard is unavailable.";
+        });
+  }
   void copy_selected() {
     if (busy)
       return;
     if (service == "notes" && preview) {
-      if (OpenClipboard(owner)) {
-        EmptyClipboard();
-        auto memory = GlobalAlloc(GMEM_MOVEABLE,
-                                  (preview_text.size() + 1) * sizeof(wchar_t));
-        if (memory) {
-          auto ptr = GlobalLock(memory);
-          memcpy(ptr, preview_text.c_str(),
-                 (preview_text.size() + 1) * sizeof(wchar_t));
-          GlobalUnlock(memory);
-          if (!SetClipboardData(CF_UNICODETEXT, memory))
-            GlobalFree(memory);
-        }
-        CloseClipboard();
-      }
+      copy_text_to_clipboard(owner, preview_text);
+      return;
+    }
+    if (preview && preview_bin_text) {
+      copy_bin_text(selected);
       return;
     }
     if (preview || review) {
@@ -1024,6 +1062,10 @@ struct Panel : std::enable_shared_from_this<Panel> {
     if (visible.empty())
       return;
     auto item = entries[visible[selection]];
+    if (item.bin_text) {
+      copy_bin_text(item.path, item.url, utf8(item.name));
+      return;
+    }
     if (!fs::exists(item.path) && !item.url.empty()) {
       run(
           [item](Http &h) {
