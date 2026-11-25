@@ -89,7 +89,7 @@ constexpr UINT kCommandChangedMessage = WM_APP + 42;
 constexpr UINT kCloseAdminPopupMessage = WM_APP + 45;
 constexpr wchar_t kAdminWindowTitle[] = L"Kalwer Administrator PTY";
 constexpr float kCloseDurationMs = 280.0f;
-constexpr wchar_t kKalwerVersion[] = L"0.13.4";
+constexpr wchar_t kKalwerVersion[] = L"0.13.5";
 constexpr wchar_t kLatestReleaseUrl[] =
     L"https://github.com/aridlin/kalwer/releases/latest";
 
@@ -562,7 +562,7 @@ struct RenderDevice {
     ComPtr<ID2D1Bitmap1> ui_target;
     ComPtr<ID2D1SolidColorBrush> brush;
     ComPtr<IDWriteFactory> write_factory;
-    ComPtr<IDWriteTextFormat> title_format;
+    ComPtr<IDWriteTextFormat> title_format, signal_heading;
     ComPtr<IDWriteTextFormat> character_format;
     ComPtr<IDWriteTextFormat> subtitle_format;
     ComPtr<IDWriteTextFormat> input_format;
@@ -1224,7 +1224,11 @@ void adjust_setting(int direction) {
             state.output_close_ms = adjust(state.output_close_ms, 250, 0, 30000);
             break;
         case 5: kalwer::appearance.mode=(kalwer::appearance.mode+direction+6)%6;break;
-        case 6: kalwer::appearance.theme=(kalwer::appearance.theme+direction+6)%6;break;
+        case 6: {
+            constexpr int count = static_cast<int>(kalwer::themes.size());
+            kalwer::appearance.theme = (kalwer::appearance.theme + direction + count) % count;
+            break;
+        }
         case 7: kalwer::appearance.opacity=std::clamp(kalwer::appearance.opacity+direction*5,30,95);break;
         case 9: kalwer::appearance.popup_mode=(kalwer::appearance.popup_mode+direction+6)%6;break;
         case 10: kalwer::appearance.bw=!kalwer::appearance.bw;break;
@@ -1854,7 +1858,8 @@ LRESULT CALLBACK settings_window_proc(HWND window,UINT message,WPARAM wparam,LPA
             if(row<13 && id>=200 && id<500) {
                 if((row==5 || row==6 || row==9) && HIWORD(wparam)==CBN_SELCHANGE) {
                     int choice=static_cast<int>(SendMessageW(reinterpret_cast<HWND>(lparam),CB_GETCURSEL,0,0));
-                    if(choice>=0 && choice<6) {
+                    const int count = static_cast<int>(row == 6 ? kalwer::themes.size() : kalwer::dithers.size());
+                    if(choice >= 0 && choice < count) {
                         (row==5?kalwer::appearance.mode:row==6?kalwer::appearance.theme:kalwer::appearance.popup_mode)=choice;
                         save_settings(); state.render_dirty=true;
                     }
@@ -1907,7 +1912,11 @@ void open_settings_popup() {
             add(L"STATIC",settings_titles[row],SS_CENTERIMAGE,22,y,295,30,0);
             if(row==5 || row==6 || row==9) {
                 HWND combo=add(L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL,325,y,260,220,200+row);
-                for(int i=0;i<6;++i) {auto label=wide(row==6?kalwer::themes[i].name:kalwer::dithers[i]);SendMessageW(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));}
+                const auto count = row == 6 ? kalwer::themes.size() : kalwer::dithers.size();
+                for (size_t i = 0; i < count; ++i) {
+                    auto label = wide(row == 6 ? kalwer::themes[i].name : kalwer::dithers[i]);
+                    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+                }
             } else {
                 add(L"BUTTON",L"−",WS_TABSTOP,325,y,40,30,300+row);
                 add(L"STATIC",L"",SS_CENTER|SS_CENTERIMAGE,370,y,160,30,200+row);
@@ -2162,6 +2171,8 @@ Output main(uint id : SV_VertexID) {
     return output;
 })hlsl";
 
+constexpr UINT kShaderParameterBytes = 64;
+
 const char* kPixelShader = R"hlsl(
 Texture2D ui_texture : register(t0);
 Texture2D backdrop_texture : register(t1);
@@ -2174,6 +2185,7 @@ cbuffer Parameters : register(b0) {
     int closing;
     float2 padding;
     float4 theme_accent;
+    float4 signal_cream;
 };
 
 static const float bayer[64] = {
@@ -2205,7 +2217,18 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
     }
     float2 pixel_position = uv * logical_size;
 
-    if (has_results != 0) {
+    if (has_results != 0 && signal_cream.a > .5) {
+        float x = pixel_position.x - 25.0;
+        float y = pixel_position.y - selection_y;
+        float inside = step(0.0, x) * (1.0 - step(600.0, x))
+                     * step(0.0, y) * (1.0 - step(58.0, y));
+        float rail = max(1.0 - step(3.0, x), step(55.0, y)) * inside;
+        float marker = step(592.0, x) * (1.0 - step(597.0, x))
+                     * step(25.0, y) * (1.0 - step(32.0, y)) * inside;
+        float alpha = max(max(marker, rail), .10 * inside);
+        ui = float4(lerp(theme_accent.rgb, signal_cream.rgb, marker) * alpha, alpha)
+           + ui * (1.0 - alpha);
+    } else if (has_results != 0) {
         float2 selection_center = float2(325.0, selection_y + 29.0);
         float box_distance = rounded_box(pixel_position, selection_center,
                                          float2(301.5, 30.5), 11.5);
@@ -2239,11 +2262,13 @@ float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET {
         ? 1.0
         : 1.0 - smoothstep(density - 0.035, density + 0.035, threshold);
     float site_radius = radius * sqrt(max(site_visibility, 0.0));
-    float antialias = max(fwidth(length(pixel_position - center)), 0.65);
+    float2 delta = abs(pixel_position - center);
+    float distance_to_site = signal_cream.a > .5 ? max(delta.x, delta.y) : length(delta);
+    float antialias = max(fwidth(distance_to_site), 0.65);
     float dot = site_visibility < 0.01
         ? 0.0
         : 1.0 - smoothstep(site_radius - antialias, site_radius + antialias,
-                           length(pixel_position - center));
+                           distance_to_site);
     float coverage = pixel_position.y < halftone_start ? 1.0 : dot;
     float reveal_front = closing != 0
         ? ease_out_cubic(opening) * (logical_size.y + 10.0)
@@ -2280,6 +2305,10 @@ HRESULT create_device_independent_resources() {
     render.character_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     render.character_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     render.character_format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    result = render.write_factory->CreateTextFormat(
+        L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 16.0f, L"en-US", render.signal_heading.GetAddressOf());
+    if (FAILED(result)) return result;
     const wchar_t* family = L"JetBrainsMono Nerd Font";
     result = render.write_factory->CreateTextFormat(
         family, nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
@@ -2363,7 +2392,7 @@ HRESULT create_graphics_device() {
     if (FAILED(result)) return result;
 
     D3D11_BUFFER_DESC constant_description{};
-    constant_description.ByteWidth = 48;
+    constant_description.ByteWidth = kShaderParameterBytes;
     constant_description.Usage = D3D11_USAGE_DYNAMIC;
     constant_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     constant_description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -2662,29 +2691,62 @@ DWORD search_text_index_at(float logical_x, float logical_y) {
         static_cast<UINT32>(query.size()), metrics.textPosition + (trailing ? 1u : 0u)));
 }
 
+constexpr D2D1_COLOR_F signal_color(unsigned rgb, float opacity = 1) {
+    return color((rgb >> 16) / 255.f, ((rgb >> 8) & 255) / 255.f, (rgb & 255) / 255.f, opacity);
+}
+
+struct SignalPaint {
+    RenderDevice& render;
+    void operator()(float x, float y, float w, float h, unsigned rgb, float opacity = 1) const {
+        render.brush->SetColor(signal_color(rgb, opacity));
+        render.d2d_context->FillRectangle(D2D1::RectF(x, y, x + w, y + h), render.brush.Get());
+    }
+};
+
 void draw_search() {
     auto& render = state.render;
-    fill_round(kSearchX, kSearchY, kSearchX + kSearchWidth,
-               kSearchY + search_height(), 12.0f, color(0.0f, 0.075f, 0.043f, 0.975f));
-    stroke_round(kSearchX, kSearchY, kSearchX + kSearchWidth,
-                 kSearchY + search_height(), 12.0f, 2.0f,
-                 color(0.31f, 0.68f, 0.47f, 0.86f));
-    set_brush(color(0.46f, 0.82f, 0.57f, 0.96f));
-    render.d2d_context->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(40, 44), 9, 9),
-                                    render.brush.Get(), 2.0f);
-    render.d2d_context->DrawLine(D2D1::Point2F(46.5f, 50.5f),
-                                 D2D1::Point2F(53.5f, 57.5f), render.brush.Get(), 2.0f);
-    draw_text(L"KALWER", render.tiny_format.Get(), 67, 17, 260, 30,
-              color(0.30f, 0.68f, 0.47f));
+    namespace sg = kalwer::signal_geometry;
+    const bool signal = kalwer::appearance.uses_signal_geometry();
+    if (signal) {
+        const SignalPaint paint{render};
+        sg::search(paint, kSearchX, kSearchY, kSearchWidth, search_height(), .98f);
+        const float cx = kSearchX + sg::search_icon_width / 2;
+        const float cy = kSearchY + sg::search_icon_height / 2;
+        paint(cx - 16, cy - .5f, 7, 1, sg::rule);
+        paint(cx - .5f, cy - 16, 1, 7, sg::rule);
+        paint(cx - .5f, cy + 9, 1, 7, sg::rule);
+        render.brush->SetColor(signal_color(sg::red));
+        render.d2d_context->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 9, 9),
+                                        render.brush.Get(), 1.5f);
+        paint(cx + 8, cy - 2.5f, 3, 5, sg::coal);
+        paint(cx + 9, cy - .5f, 7, 1, sg::red);
+        paint(cx - 2, cy - 2, 4, 4, sg::cream);
+        draw_text(L"KALWER", render.tiny_format.Get(), 74, 16, 133, 28,
+                  signal_color(sg::ink));
+    } else {
+        const float right = kSearchX + kSearchWidth;
+        fill_round(kSearchX, kSearchY, right, kSearchY + search_height(),
+                   12.0f, color(0.0f, 0.075f, 0.043f, 0.975f));
+        stroke_round(kSearchX, kSearchY, right, kSearchY + search_height(),
+                     12.0f, 2.0f, color(0.31f, 0.68f, 0.47f, 0.86f));
+        set_brush(color(0.46f, 0.82f, 0.57f, 0.96f));
+        render.d2d_context->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(40, 44), 9, 9),
+                                        render.brush.Get(), 2.0f);
+        render.d2d_context->DrawLine(D2D1::Point2F(46.5f, 50.5f),
+                                     D2D1::Point2F(53.5f, 57.5f), render.brush.Get(), 2.0f);
+        draw_text(L"KALWER", render.tiny_format.Get(), 67, 17, 260, 30, color(0.30f, 0.68f, 0.47f));
+    }
     const wchar_t* help = L"> PTY   < JOBS   ? GOOGLE   ↑↓ SCROLL   ↵ GO";
     draw_text(help, render.tiny_format.Get(), 350.0f,
-              58+input_extra_height, 625, 72+input_extra_height, color(0.46f, 0.67f, 0.52f));
+              58+input_extra_height, 625, 72+input_extra_height,
+              signal ? color(.85f, .70f, .72f) : color(.46f, .67f, .52f));
 
     const std::wstring query = window_text(state.edit);
     if(input_extra_height>0)return; // Native multiline edit owns text, selection and IME.
     const std::wstring display = query.empty() ? L"SEARCH THE VAULT" : query;
-    const D2D1_COLOR_F input_color = query.empty()
-        ? color(0.46f, 0.67f, 0.52f) : color(0.81f, 0.89f, 0.82f);
+    const D2D1_COLOR_F input_color = signal
+        ? signal_color(query.empty() ? sg::muted : sg::paper)
+        : query.empty() ? color(.46f, .67f, .52f) : color(.81f, .89f, .82f);
     ComPtr<IDWriteTextLayout> layout;
     render.write_factory->CreateTextLayout(display.c_str(), static_cast<UINT32>(display.size()),
                                             render.input_format.Get(), 548.0f, 31.0f,
@@ -2703,7 +2765,8 @@ void draw_search() {
             if (count) {
                 layout->HitTestTextRange(start, end - start, text_x, text_y,
                                          metrics.data(), count, &count);
-                set_brush(color(0.16f, 0.48f, 0.29f, 0.92f));
+                if (signal) render.brush->SetColor(signal_color(sg::red_fill));
+                else set_brush(color(0.16f, 0.48f, 0.29f, 0.92f));
                 for (const auto& metric : metrics) {
                     render.d2d_context->FillRectangle(
                         D2D1::RectF(metric.left, metric.top, metric.left + metric.width,
@@ -2720,19 +2783,31 @@ void draw_search() {
         draw_text(suggestion.substr(query.size()), render.input_format.Get(), text_x + metrics.widthIncludingTrailingWhitespace,
                   text_y, 615, 62, color(0.40f, 0.46f, 0.43f));
     }
-    set_brush(input_color);
-    render.d2d_context->DrawTextLayout(D2D1::Point2F(text_x, text_y), layout.Get(),
-                                        render.brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-    if (!query.empty()) {
+    if (signal) render.brush->SetColor(input_color);
+    else set_brush(input_color);
+    render.d2d_context->DrawTextLayout(D2D1::Point2F(text_x + (signal && query.empty() ? 3.f : 0.f), text_y),
+                                        layout.Get(), render.brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    if (signal ? (GetFocus() == state.edit && ghost_start == ghost_end) : !query.empty()) {
         DWORD caret = 0;
         SendMessageW(state.edit, EM_GETSEL, reinterpret_cast<WPARAM>(&caret), 0);
         float caret_x = 0.0f, caret_y = 0.0f;
         DWRITE_HIT_TEST_METRICS metrics{};
-        layout->HitTestTextPosition(caret, FALSE, &caret_x, &caret_y, &metrics);
-        set_brush(color(0.62f, 0.91f, 0.70f, 0.92f));
+        if (FAILED(layout->HitTestTextPosition(caret, FALSE, &caret_x, &caret_y, &metrics))) return;
+        float top = text_y + caret_y;
+        float bottom = top + metrics.height;
+        if (signal) {
+            DWRITE_LINE_METRICS line{};
+            UINT32 count = 0;
+            if (SUCCEEDED(layout->GetLineMetrics(&line, 1, &count)) && count == 1) {
+                bottom = text_y + line.baseline;
+                top = bottom - render.input_format->GetFontSize() * .72f;
+            }
+            render.brush->SetColor(signal_color(sg::cream));
+        } else {
+            set_brush(color(0.62f, 0.91f, 0.70f, 0.92f));
+        }
         render.d2d_context->FillRectangle(
-            D2D1::RectF(text_x + caret_x, text_y + caret_y,
-                        text_x + caret_x + 1.8f, text_y + caret_y + metrics.height),
+            D2D1::RectF(text_x + caret_x, top, text_x + caret_x + 1.8f, bottom),
             render.brush.Get());
     }
 }
@@ -2744,8 +2819,9 @@ float result_slide() {
 
 void draw_results() {
     auto& render = state.render;
+    const bool signal = kalwer::appearance.uses_signal_geometry();
     fill_round(kSearchX, results_y() - 6, kSearchX + kSearchWidth,
-               kLogicalHeight - 4.0f, 12.0f, color(0.0f, 0.075f, 0.043f, 0.88f));
+               kLogicalHeight - 4.0f, signal ? 0.f : 12.f, color(0.0f, 0.075f, 0.043f, 0.88f));
     const int first_drawn = std::max(0, static_cast<int>(std::floor(state.scroll_visual)));
     const int visible_end = std::min(static_cast<int>(state.results.size()),
                                      static_cast<int>(std::ceil(state.scroll_visual)) +
@@ -2757,10 +2833,14 @@ void draw_results() {
         const AppEntry& result = state.results[static_cast<size_t>(index)];
         const float display_row = static_cast<float>(index) - state.scroll_visual;
         const float y = results_y() + display_row * kRowPitch + result_slide();
-        fill_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
-                   color(0.0f, 0.105f, 0.057f, 0.90f));
-        stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
-                     1.0f, color(0.31f, 0.68f, 0.47f, 0.20f));
+        if (signal) {
+            kalwer::signal_geometry::row(SignalPaint{render}, kResultX, y, kResultWidth, kRowHeight);
+        } else {
+            fill_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+                       color(0.0f, 0.105f, 0.057f, 0.90f));
+            stroke_round(kResultX, y, kResultX + kResultWidth, y + kRowHeight, 10.0f,
+                         1.0f, color(0.31f, 0.68f, 0.47f, 0.20f));
+        }
 
         if (!result.link.native().starts_with(L"::")) {
             if (ComPtr<ID2D1Bitmap1> icon = icon_for(result)) {
@@ -2771,10 +2851,11 @@ void draw_results() {
         } else {
             draw_special_icon(result, kResultX + 12, y + 10);
         }
-        draw_text(result.title, render.title_format.Get(), kResultX + 62, y + 9,
+        draw_text(result.title, signal ? render.signal_heading.Get() : render.title_format.Get(),
+                  kResultX + 62, y + 9,
                   kResultX + 530, y + 31, color(0.81f, 0.89f, 0.82f));
         draw_text(result.subtitle, render.subtitle_format.Get(), kResultX + 62, y + 32,
-                  kResultX + 530, y + 52, color(0.46f, 0.67f, 0.52f));
+                  kResultX + 530, y + 52, signal ? color(.85f, .70f, .72f) : color(.46f, .67f, .52f));
         if (result.pinned) {
             draw_text(L"★", render.subtitle_format.Get(), kResultX + 548, y + 20,
                       kResultX + 567, y + 40, color(0.62f, 0.91f, 0.70f));
@@ -2898,6 +2979,17 @@ void draw_popup_button(const wchar_t* label, PopupButton button,
     left += inset;
     right -= inset;
     top += inset;
+    if (kalwer::appearance.uses_signal_geometry()) {
+        namespace sg = kalwer::signal_geometry;
+        const SignalPaint paint{state.render};
+        const bool active = hovered || pressed;
+        paint(left, top, right - left, 25.f - inset, active ? 0x3a1c23 : sg::coal);
+        paint(left, top + 24.f - inset, right - left, 1, active ? sg::red : sg::rule);
+        paint(right - 9, top, 9, 1, active ? sg::cream : sg::red);
+        draw_text(label, state.render.tiny_format.Get(), left + 7, top + 6,
+                  right - 3, top + 22, signal_color(sg::cream));
+        return;
+    }
     fill_round(left, top, right, top + 25.0f - inset, 3.0f,
                pressed ? color(0.12f, 0.42f, 0.245f, 0.99f)
                        : hovered ? color(0.055f, 0.28f, 0.15f, 0.99f)
@@ -3273,10 +3365,16 @@ void draw_command_popup() {
         set_brush(color(0.0f,0.075f,0.043f,.88f));
         render.d2d_context->FillRectangle(D2D1::RectF(panel_left,panel_top,panel_right,std::min(current_bottom,panel_top+50)),render.brush.Get());
     }
-    set_brush(color(0.46f, 0.82f, 0.57f, 0.98f));
-    render.d2d_context->DrawRectangle(
-        D2D1::RectF(panel_left, panel_top, panel_right, current_bottom),
-        render.brush.Get(), 1.5f);
+    const bool signal = kalwer::appearance.uses_signal_geometry();
+    if (signal) {
+        kalwer::signal_geometry::popup(SignalPaint{render}, panel_left, panel_top,
+                                       panel_right - panel_left, current_bottom - panel_top);
+    } else {
+        set_brush(color(0.46f, 0.82f, 0.57f, 0.98f));
+        render.d2d_context->DrawRectangle(
+            D2D1::RectF(panel_left, panel_top, panel_right, current_bottom),
+            render.brush.Get(), 1.5f);
+    }
 
     D2D1_MATRIX_3X2_F transform{};
     render.d2d_context->GetTransform(&transform);
@@ -3288,7 +3386,8 @@ void draw_command_popup() {
                               D2D1::Point2F(0.0f, panel_top)) * transform);
     std::wstring title = state.popup_game ? wide(state.popup_game->title()) : state.popup_document ? wide(state.popup_document->title) : L"> " + state.popup_job->command;
     if (title.size() > 34) title = title.substr(0, 33) + L"…";
-    draw_text(title, render.tiny_format.Get(), panel_left + 12, panel_top + 10,
+    draw_text(title, signal ? render.signal_heading.Get() : render.tiny_format.Get(),
+              panel_left + 12, panel_top + 10,
               panel_left + 245, panel_top + 30, color(0.81f, 0.89f, 0.82f));
     const std::wstring status = state.popup_game ? std::to_wstring(kalwer::wallet.balance)+L" koins" : state.popup_browser||state.popup_fred?L"":state.popup_document ? L"TEXT" : state.popup_job->running.load() ? L"RUNNING" : L"EXIT " + std::to_wstring(state.popup_job->exit_code.load());
     draw_text(status, render.tiny_format.Get(), panel_left + 246, panel_top + 10,
@@ -3446,7 +3545,11 @@ HRESULT render_frame() {
         std::int32_t closing;
         float padding[2];
         float theme_accent[4];
-    } parameters{
+        float signal_cream[4];
+    };
+    static_assert(sizeof(ShaderParameters) == kShaderParameterBytes);
+    constexpr auto cream = signal_color(kalwer::signal_geometry::cream);
+    ShaderParameters parameters{
         static_cast<float>(detached_popup() ? kPopupLogicalWidth : state.popup_open ? kExpandedLogicalWidth : kLogicalWidth),
         static_cast<float>(kLogicalHeight),
         opening,
@@ -3455,6 +3558,7 @@ HRESULT render_frame() {
         state.closing ? 1 : 0,
         {has_backdrop?float(detached_popup()?kalwer::appearance.popup_mode:kalwer::appearance.mode)+(kalwer::appearance.bw?10.f:0.f):0.f,detached_popup()?kalwer::appearance.opacity/100.f:0.f},
         {((kalwer::themes[kalwer::appearance.theme].accent>>16)&255)/255.f,((kalwer::themes[kalwer::appearance.theme].accent>>8)&255)/255.f,(kalwer::themes[kalwer::appearance.theme].accent&255)/255.f,(detached_popup()?kalwer::appearance.popup_keep_halftone:kalwer::appearance.keep_halftone)?1.f:0.f},
+        {cream.r, cream.g, cream.b, kalwer::appearance.uses_signal_geometry() ? 1.f : 0.f},
     };
     std::memcpy(mapped.pData, &parameters, sizeof(parameters));
     render.d3d_context->Unmap(render.constants.Get(), 0);

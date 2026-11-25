@@ -257,8 +257,15 @@ public final class MainActivity extends Activity {
         });
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = text("KALWER", 12, GREEN);
-        brand.setLetterSpacing(.16f);
+        boolean signal = Appearance.theme == Appearance.SIGNAL_GEOMETRY;
+        float density = getResources().getDisplayMetrics().density;
+        TextView brand = text("KALWER", signal ? 17 : 12, signal ? SignalDrawable.INK : GREEN);
+        brand.setLetterSpacing(signal ? -.03f : .16f);
+        if (signal) {
+            brand.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
+            brand.setBackground(new SignalDrawable(SignalDrawable.Surface.MASTHEAD, density));
+            brand.setPadding(dp(9), 0, 0, 0);
+        }
         header.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1));
         header.addView(button("⚙", "Kalwer settings", this::settings), new LinearLayout.LayoutParams(dp(48), dp(48)));
         header.addView(button("×", "Close Kalwer", this::finish), new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -266,19 +273,26 @@ public final class MainActivity extends Activity {
 
         LinearLayout search = new LinearLayout(this);
         search.setGravity(Gravity.CENTER_VERTICAL);
-        search.setBackground(panel(0xd9001b0f, GREEN).anchor(search));
+        search.setBackground(signal ? new SignalDrawable(SignalDrawable.Surface.SEARCH, density)
+                : panel(0xd9001b0f, GREEN).anchor(search));
         query = new EditText(this);
         query.setId(R.id.search_query);
         query.setSingleLine(true);
         query.setTextColor(TEXT);
         query.setHintTextColor(MUTED);
+        if (signal) query.setHighlightColor(SignalDrawable.RED_FILL);
         query.setTextSize(18);
         query.setTypeface(Typeface.MONOSPACE);
         query.setHint("SEARCH THE VAULT");
         query.setContentDescription("Search apps, calculate, or search Google");
         query.setBackgroundColor(Color.TRANSPARENT);
-        query.setPadding(dp(14), dp(12), dp(4), dp(12));
+        query.setPadding(dp(signal ? 50 : 14), dp(12), dp(4), dp(12));
         query.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (signal && Build.VERSION.SDK_INT >= 29 && query.getTextCursorDrawable() != null) {
+            Drawable cursor = query.getTextCursorDrawable().mutate();
+            cursor.setTint(Appearance.SIGNAL_CREAM);
+            query.setTextCursorDrawable(cursor);
+        }
         query.setFilters(new InputFilter[]{new InputFilter.LengthFilter(2048)});
         query.setImeOptions(EditorInfo.IME_ACTION_GO | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         search.addView(query, new LinearLayout.LayoutParams(0, -2, 1));
@@ -295,8 +309,8 @@ public final class MainActivity extends Activity {
         content.addView(status);
         list = new ListView(this);
         list.setId(R.id.search_results);
-        list.setDividerHeight(dp(6));
         list.setDivider(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        list.setDividerHeight(dp(signal ? 2 : 6));
         list.setCacheColorHint(Color.TRANSPARENT);
         list.setSelector(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
         list.setClipToPadding(false);
@@ -611,7 +625,7 @@ public final class MainActivity extends Activity {
         control.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,choices));control.setSelection(selected);box.addView(control);
         control.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int i,long id){choose.accept(i);}});
     }
-    private void applyPalette(){TEXT=0xff000000|Appearance.TEXT[Appearance.theme];GREEN=0xff000000|Appearance.ACCENT[Appearance.theme];MUTED=Appearance.tint(0xff92b89f);}
+    private void applyPalette(){TEXT=0xff000000|Appearance.TEXT[Appearance.theme];GREEN=0xff000000|Appearance.ACCENT[Appearance.theme];MUTED=Appearance.theme == Appearance.SIGNAL_GEOMETRY ? SignalDrawable.MUTED : Appearance.tint(0xff92b89f);}
     private void requestBackdrop(){
         if((Appearance.mode==0 && Appearance.popupMode==0) || capturing || gamePopup!=null)return;
         capturing=true;query.removeCallbacks(showIme);
@@ -704,10 +718,16 @@ public final class MainActivity extends Activity {
         final ImageView icon = new ImageView(MainActivity.this);
         final TextView symbol = text("", 26, GREEN), title = text("", 17, TEXT), detail = text("", 11, MUTED);
         final TextView star;
-        final Drawable selectedBackground = panel(0xe008321e, GREEN).anchor(row), normalBackground = panel(0xb8001b0f, 0x554ead78).anchor(row);
+        final Drawable selectedBackground, normalBackground;
         Boolean active;
         int position;
         Row() {
+            boolean signal = Appearance.theme == Appearance.SIGNAL_GEOMETRY;
+            float density = getResources().getDisplayMetrics().density;
+            selectedBackground = signal ? new SignalDrawable(SignalDrawable.Surface.SELECTED_ROW, density)
+                    : panel(0xe008321e, GREEN).anchor(row);
+            normalBackground = signal ? new SignalDrawable(SignalDrawable.Surface.ROW, density)
+                    : panel(0xb8001b0f, 0x554ead78).anchor(row);
             row.setTag(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(12), dp(10), dp(4), dp(10));
@@ -721,7 +741,7 @@ public final class MainActivity extends Activity {
             LinearLayout labels = new LinearLayout(MainActivity.this);
             labels.setOrientation(LinearLayout.VERTICAL);
             labels.setPadding(dp(12), 0, dp(4), 0);
-            title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            title.setTypeface(signal ? Typeface.SANS_SERIF : Typeface.MONOSPACE, Typeface.BOLD);
             title.setMaxLines(2);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             labels.addView(title);
@@ -744,9 +764,13 @@ public final class MainActivity extends Activity {
         return view;
     }
     private TextView button(String label, String description, Runnable action) {
-        TextView view = text(label, label.length() > 2 ? 12 : 23, GREEN);
+        boolean signal = Appearance.theme == Appearance.SIGNAL_GEOMETRY;
+        TextView view = text(label, label.length() > 2 ? 12 : 23, signal ? Appearance.SIGNAL_CREAM : GREEN);
         view.setGravity(Gravity.CENTER); view.setContentDescription(description);
-        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x4479d394), null, panel(Color.WHITE, Color.TRANSPARENT)));
+        Drawable face = signal ? new SignalDrawable(SignalDrawable.Surface.BUTTON,
+                getResources().getDisplayMetrics().density) : null;
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(signal ? 0x44ef5148 : 0x4479d394),
+                face, panel(Color.WHITE, Color.TRANSPARENT)));
         view.setOnClickListener(v -> action.run()); view.setFocusable(true);
         return view;
     }

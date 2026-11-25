@@ -7,19 +7,28 @@ import org.json.JSONObject;
 
 final class Appearance {
     static final String[] MODES={"Halftone","Atkinson","Floyd-Steinberg","Bayer 4x4","Bayer 8x8","Threshold"};
-    static final String[] THEMES={"Forest","Amber","Glacier","Rose","Violet","Mono"};
-    static final int[] DARK={0x081a18,0x20170b,0x0d1928,0x241420,0x19142a,0x191919};
-    static final int[] ACCENT={0x8ce9b3,0xf4bb65,0x83d3f7,0xf1a0c5,0xbba1f6,0xd0d0d0};
-    static final int[] TEXT={0xe0f5e8,0xffefcf,0xe0f1ff,0xffe4f0,0xeee7ff,0xf4f4f4};
+    // Keep indices aligned with the shared native runtime.
+    static final int SIGNAL_GEOMETRY = 6;
+    static final int SIGNAL_CREAM = 0xffffe08a;
+    static final String[] THEMES={"Forest","Amber","Glacier","Rose","Violet","Mono","Signal Geometry"};
+    static final int[] DARK={0x081a18,0x20170b,0x0d1928,0x241420,0x19142a,0x191919,0x140f12};
+    static final int[] ACCENT={0x8ce9b3,0xf4bb65,0x83d3f7,0xf1a0c5,0xbba1f6,0xd0d0d0,SignalDrawable.RED & 0xffffff};
+    static final int[] TEXT={0xe0f5e8,0xffefcf,0xe0f1ff,0xffe4f0,0xeee7ff,0xf4f4f4,0xf9f1eb};
     static int mode=0,popupMode=0,theme=0,scale=1;
     static boolean bw=false,keepHalftone=true,popupHalftone=true;
     static int clamp(int x,int lo,int hi){return Math.max(lo,Math.min(hi,x));}
-    static void load(SharedPreferences p){bw=p.getBoolean("backdrop_bw",false);keepHalftone=p.getBoolean("keep_halftone",true);popupHalftone=p.getBoolean("popup_keep_halftone",true);popupMode=clamp(p.getInt("popup_dither",0),0,5);mode=clamp(p.getInt("dither",0),0,5);theme=clamp(p.getInt("theme",0),0,5);scale=clamp(p.getInt("dither_scale",1),1,8);}
+    static void load(SharedPreferences p){bw=p.getBoolean("backdrop_bw",false);keepHalftone=p.getBoolean("keep_halftone",true);popupHalftone=p.getBoolean("popup_keep_halftone",true);popupMode=clamp(p.getInt("popup_dither",0),0,5);mode=clamp(p.getInt("dither",0),0,5);theme=clamp(p.getInt("theme",0),0,THEMES.length-1);scale=clamp(p.getInt("dither_scale",1),1,8);}
     static int tint(int color) {
         if(theme==0)return color;
         int r=Color.red(color),g=Color.green(color),b=Color.blue(color);
         if(g<r*.92 || g<b*.9)return color;
-        int max=Math.max(r,Math.max(g,b)); int target=max<65?DARK[theme]:max>221?TEXT[theme]:ACCENT[theme];
+        int max = Math.max(r, Math.max(g, b));
+        if (theme == SIGNAL_GEOMETRY) {
+            int rgb = max < 35 ? DARK[theme] : max < 62 ? 0x1e1419 :
+                max < 183 ? ACCENT[theme] : max < 221 ? 0xc5b7bb : TEXT[theme];
+            return (color & 0xff000000) | rgb;
+        }
+        int target = max < 65 ? DARK[theme] : max > 221 ? TEXT[theme] : ACCENT[theme];
         return Color.argb(Color.alpha(color),Color.red(target),Color.green(target),Color.blue(target));
     }
     static String export(SharedPreferences p) throws Exception {
@@ -31,7 +40,7 @@ final class Appearance {
     }
     static void importConfig(SharedPreferences p,String text) throws Exception {
         JSONObject obj=new JSONObject(text);if(obj.getInt("version")!=1)throw new IllegalArgumentException("Unsupported config version");
-        p.edit().putInt("popup_dither",clamp(obj.optInt("popup_dither",0),0,5)).putBoolean("backdrop_bw",obj.optBoolean("backdrop_bw",false)).putBoolean("keep_halftone",obj.optBoolean("keep_halftone",true)).putBoolean("popup_keep_halftone",obj.optBoolean("popup_keep_halftone",true)).putInt("dither",clamp(obj.getInt("dither"),0,5)).putInt("theme",clamp(obj.getInt("theme"),0,5))
+        p.edit().putInt("popup_dither",clamp(obj.optInt("popup_dither",0),0,5)).putBoolean("backdrop_bw",obj.optBoolean("backdrop_bw",false)).putBoolean("keep_halftone",obj.optBoolean("keep_halftone",true)).putBoolean("popup_keep_halftone",obj.optBoolean("popup_keep_halftone",true)).putInt("dither",clamp(obj.getInt("dither"),0,5)).putInt("theme",clamp(obj.getInt("theme"),0,THEMES.length-1))
             .putInt("opacity",clamp(obj.getInt("opacity"),30,95)).putInt("dither_scale",clamp(obj.getInt("dither_scale"),1,8))
             .putInt("retention_ms",clamp(obj.getInt("retention_ms"),0,30000)).apply();load(p);
     }

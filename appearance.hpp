@@ -8,6 +8,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include "signal_geometry.hpp"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -28,16 +29,20 @@ inline bool atomic_text(const std::filesystem::path& path,const std::string& val
 #endif
 }
 struct Theme { const char* name; unsigned background,accent,text; };
-inline constexpr std::array<Theme,6> themes{{
+// Theme indices are stored in appearance.ini and shared with Android.
+inline constexpr int signal_geometry_theme = 6;
+inline constexpr std::array<Theme,7> themes{{
     {"Forest",0x081a18,0x8ce9b3,0xe0f5e8},{"Amber",0x20170b,0xf4bb65,0xffefcf},
     {"Glacier",0x0d1928,0x83d3f7,0xe0f1ff},{"Rose",0x241420,0xf1a0c5,0xffe4f0},
-    {"Violet",0x19142a,0xbba1f6,0xeee7ff},{"Mono",0x191919,0xd0d0d0,0xf4f4f4}}};
+    {"Violet",0x19142a,0xbba1f6,0xeee7ff},{"Mono",0x191919,0xd0d0d0,0xf4f4f4},
+    {"Signal Geometry",0x140f12,signal_geometry::red,0xf9f1eb}}};
 inline constexpr std::array<const char*,6> dithers{"Halftone","Atkinson","Floyd-Steinberg","Bayer 4x4","Bayer 8x8","Threshold"};
 struct Appearance {
     int mode=0,popup_mode=0,theme=0,opacity=72,scale=1;
     bool bw=false,keep_halftone=true,popup_keep_halftone=true;
     std::filesystem::path directory;
-    void clamp() { mode=std::clamp(mode,0,5); popup_mode=std::clamp(popup_mode,0,5); theme=std::clamp(theme,0,5); opacity=std::clamp(opacity,30,95); scale=std::clamp(scale,1,8); }
+    bool uses_signal_geometry() const { return theme == signal_geometry_theme; }
+    void clamp() { mode=std::clamp(mode,0,5); popup_mode=std::clamp(popup_mode,0,5); theme=std::clamp(theme,0,static_cast<int>(themes.size())-1); opacity=std::clamp(opacity,30,95); scale=std::clamp(scale,1,8); }
     bool load(const char* name="appearance.ini") {
         std::ifstream in(directory/name); if(!in) return false;
         Appearance next=*this; std::string line;
@@ -56,6 +61,13 @@ struct Appearance {
         unsigned r=(c>>16)&255,g=(c>>8)&255,b=c&255;
         // Theme neutral/green UI surfaces; gameplay's orange, purple and blue retain their meaning.
         if(g<r*.92 || g<b*.9) return c;
+        if(uses_signal_geometry()) {
+            const unsigned level = std::max({r,g,b});
+            if(level < 62) return level < 35 ? themes[theme].background : signal_geometry::coal;
+            if(level >= 221) return themes[theme].text;
+            if(level >= 183) return signal_geometry::muted;
+            return themes[theme].accent;
+        }
         double value=std::max({r,g,b})/255.; unsigned target=value<.24?themes[theme].background:value>.87?themes[theme].text:themes[theme].accent;
         double gain=value<.24?std::clamp(value/.102,.45,2.):value>.87?1.:std::clamp(value/.914,.2,1.);
         unsigned result=0; for(int shift:{0,8,16}) result|=unsigned(std::min(255.,((target>>shift)&255)*gain))<<shift;
