@@ -16,6 +16,8 @@ final class HalftoneDrawable extends Drawable {
     private final int[] location = new int[2];
     private final Matrix phase = new Matrix();
     private View anchor;
+    private final boolean signalPopup;
+    private final float density;
     private int phaseX = Integer.MIN_VALUE, phaseY = Integer.MIN_VALUE;
 
     HalftoneDrawable anchor(View view) { anchor = view; return this; }
@@ -24,7 +26,9 @@ final class HalftoneDrawable extends Drawable {
     HalftoneDrawable(int color, int outline, float density, float radiusDp,boolean popup) {
         int mode=popup?Appearance.popupMode:Appearance.mode;boolean keep=popup?Appearance.popupHalftone:Appearance.keepHalftone;
         color=Appearance.tint(color);outline=Appearance.tint(outline);
-        radius = radiusDp * density;
+        this.density = density;
+        signalPopup = popup && Appearance.theme == Appearance.SIGNAL_GEOMETRY;
+        radius = signalPopup ? 0 : radiusDp * density;
         stroke = outline == Color.TRANSPARENT ? 0 : density;
         int size = Math.max(4, Math.round(8 * density));
         tileSize = size;
@@ -62,7 +66,19 @@ final class HalftoneDrawable extends Drawable {
             }
         }
         canvas.drawRoundRect(bounds, radius, radius, fill);
-        if (stroke > 0) canvas.drawRoundRect(bounds, radius, radius, edge);
+        if (signalPopup) {
+            int alpha = edge.getAlpha();
+            edge.setStyle(Paint.Style.FILL);
+            edge.setColor(SignalDrawable.RED);
+            edge.setAlpha(alpha);
+            canvas.drawRect(bounds.left, bounds.top,
+                    Math.min(bounds.right, bounds.left + 92 * density), bounds.top + 2 * density, edge);
+            edge.setColor(Appearance.SIGNAL_CREAM);
+            edge.setAlpha(alpha);
+            canvas.drawRect(bounds.left, bounds.top + 2 * density, bounds.left + 2 * density, bounds.bottom, edge);
+        } else if (stroke > 0) {
+            canvas.drawRoundRect(bounds, radius, radius, edge);
+        }
     }
     @Override public void setAlpha(int alpha) { fill.setAlpha(alpha); edge.setAlpha(alpha); invalidateSelf(); }
     @Override public void setColorFilter(ColorFilter filter) { fill.setColorFilter(filter); invalidateSelf(); }

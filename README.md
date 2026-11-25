@@ -328,10 +328,12 @@ application data directory. No account or cross-device synchronization is used.
 `/settings` (also `/config`) offers:
 
 - Halftone (default), Atkinson, Floyd–Steinberg, Bayer 4×4, Bayer 8×8, Threshold.
-- Forest, Amber, Glacier, Rose, Violet, and Mono color themes.
+- Forest, Amber, Glacier, Rose, Violet, Mono, and Signal Geometry color themes.
 - Surface opacity (30–95%) and dither dot size (1–8, default 1).
 - Independent launcher and popup dither selections, each with a Keep Halftone checkbox.
 - Black-and-white backdrop checkbox. Threshold always uses pure black and white.
+
+Signal Geometry uses a stepped search frame, divided result rows, a red selection rail, and square-edged popups.
 
 `/config-save` writes the current appearance preset; `/config-load` restores it.
 These are editable `appearance.ini` and `preset.ini` files in Kalwer's config

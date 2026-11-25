@@ -53,6 +53,19 @@ void theme_source_rgba(cairo_t* cr,double r,double g,double b,double a) {
     cairo_set_source_rgba(cr,((c>>16)&255)/255.,((c>>8)&255)/255.,(c&255)/255.,a);
 }
 
+struct SignalPaint {
+    cairo_t* cr;
+    void source(unsigned color, float opacity = 1) const {
+        cairo_set_source_rgba(cr, (color >> 16) / 255., ((color >> 8) & 255) / 255.,
+                              (color & 255) / 255., opacity);
+    }
+    void operator()(float x, float y, float w, float h, unsigned color, float opacity = 1) const {
+        source(color, opacity);
+        cairo_rectangle(cr, x, y, w, h);
+        cairo_fill(cr);
+    }
+};
+
 constexpr int kWindowWidth = 650;
 constexpr int kWindowHeight = 632;
 constexpr double kBarOutline = 2.0;
@@ -72,9 +85,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.4+local.1";
+constexpr const char* kKalwerVersion = "0.13.5+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.4";
+constexpr const char* kKalwerVersion = "0.13.5";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -845,7 +858,10 @@ void draw_layout(cairo_t* cr, const std::string& text, double x, double y,
             if (position < 0 || position >= g_utf8_strlen(text.c_str(), -1)) continue;
             const std::size_t start = byte_offset_for_character(text, position);
             const std::size_t end = byte_offset_for_character(text, position + 1);
-            PangoAttribute* foreground = pango_attr_foreground_new(158 * 257, 232 * 257, 180 * 257);
+            const bool signal = kalwer::appearance.uses_signal_geometry();
+            PangoAttribute* foreground = signal
+                ? pango_attr_foreground_new(255 * 257, 224 * 257, 138 * 257)
+                : pango_attr_foreground_new(158 * 257, 232 * 257, 180 * 257);
             foreground->start_index = static_cast<guint>(start);
             foreground->end_index = static_cast<guint>(end);
             pango_attr_list_insert(attributes, foreground);
@@ -862,16 +878,19 @@ void draw_layout(cairo_t* cr, const std::string& text, double x, double y,
 }
 
 void draw_entry_contents(cairo_t* cr, const std::string& text) {
+    namespace sg = kalwer::signal_geometry;
+    const bool signal = kalwer::appearance.uses_signal_geometry();
+    const bool placeholder = text.empty();
     PangoLayout* layout = pango_cairo_create_layout(cr);
     PangoFontDescription* description =
         pango_font_description_from_string("JetBrainsMono Nerd Font SemiBold 15");
     pango_layout_set_font_description(layout, description);
-    pango_layout_set_text(layout, text.c_str(), -1);
+    pango_layout_set_text(layout, placeholder ? "SEARCH THE VAULT" : text.c_str(), -1);
 
     const int cursor = gtk_editable_get_position(GTK_EDITABLE(state.entry));
     const std::size_t cursor_byte = byte_offset_for_character(text, cursor);
     PangoRectangle cursor_position{};
-    pango_layout_index_to_pos(layout, static_cast<int>(cursor_byte), &cursor_position);
+    pango_layout_get_cursor_pos(layout, static_cast<int>(cursor_byte), &cursor_position, nullptr);
     const double cursor_layout_x = cursor_position.x / static_cast<double>(PANGO_SCALE);
     constexpr double text_x = 67.0;
     constexpr double text_y = 33.0;
@@ -898,15 +917,17 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
                              end_position.x / static_cast<double>(PANGO_SCALE);
         cairo_rectangle(cr, std::min(start_x, end_x), 30.0,
                         std::max(1.0, std::abs(end_x - start_x)), 25.0);
-        theme_source_rgba(cr, 0.16, 0.48, 0.29, 0.92);
+        if (signal) SignalPaint{cr}.source(sg::red_fill);
+        else theme_source_rgba(cr, 0.16, 0.48, 0.29, 0.92);
         cairo_fill(cr);
     }
 
-    theme_source_rgba(cr, 0.81, 0.89, 0.82, 1.0);
-    cairo_move_to(cr, text_x - scroll_x, text_y);
+    if (signal) SignalPaint{cr}.source(placeholder ? sg::muted : sg::paper);
+    else theme_source_rgba(cr, 0.81, 0.89, 0.82, 1.0);
+    cairo_move_to(cr, text_x - scroll_x + (signal && placeholder ? 3 : 0), text_y);
     pango_cairo_show_layout(cr, layout);
 
-    if (cursor_byte == text.size() && selection_start == selection_end) {
+    if (!placeholder && cursor_byte == text.size() && selection_start == selection_end) {
         const auto suggestion = suggested_completion();
         if (suggestion.size() > text.size()) {
             draw_layout(cr, suggestion.substr(text.size()), text_x - scroll_x + cursor_layout_x, text_y,
@@ -914,9 +935,23 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
         }
     }
     const double caret_x = text_x - scroll_x + cursor_layout_x;
-    theme_source_rgba(cr, 0.62, 0.91, 0.70, 0.92);
-    cairo_rectangle(cr, caret_x, 31.0, 1.8, 23.0);
-    cairo_fill(cr);
+    if (signal) {
+        if (gtk_widget_has_focus(state.entry) && selection_start == selection_end) {
+            // Measure a capital in the query font. The caret follows the baseline
+            // without changing height when a query contains descenders or accents.
+            const int baseline = pango_layout_get_baseline(layout);
+            pango_layout_set_text(layout, "H", 1);
+            PangoRectangle cap{};
+            pango_layout_get_extents(layout, &cap, nullptr);
+            const double bottom = text_y + baseline / double(PANGO_SCALE);
+            const double height = cap.height / double(PANGO_SCALE);
+            SignalPaint{cr}(caret_x, bottom - height, 1.5f, height, sg::cream);
+        }
+    } else {
+        theme_source_rgba(cr, 0.62, 0.91, 0.70, 0.92);
+        cairo_rectangle(cr, caret_x, 31.0, 1.8, 23.0);
+        cairo_fill(cr);
+    }
     cairo_restore(cr);
 
     pango_font_description_free(description);
@@ -924,47 +959,67 @@ void draw_entry_contents(cairo_t* cr, const std::string& text) {
 }
 
 void draw_search(cairo_t* cr) {
-    rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, search_height(), 12);
-    theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
-    cairo_fill_preserve(cr);
-    cairo_set_line_width(cr, kBarOutline);
-    theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.86);
-    cairo_stroke(cr);
-
-    theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
-    cairo_set_line_width(cr, 2.0);
-    cairo_arc(cr, 40, 44, 9, 0, 2 * G_PI);
-    cairo_stroke(cr);
-    cairo_move_to(cr, 46.5, 50.5);
-    cairo_line_to(cr, 53.5, 57.5);
-    cairo_stroke(cr);
+    namespace sg = kalwer::signal_geometry;
+    const bool signal = kalwer::appearance.uses_signal_geometry();
+    if (signal) {
+        sg::search(SignalPaint{cr}, kSearchX, kSearchY, kSearchWidth, search_height(),
+                   state.output_game ? .08f : .98f);
+        const double cx = kSearchX + sg::search_icon_width / 2;
+        const double cy = kSearchY + sg::search_icon_height / 2;
+        const SignalPaint paint{cr};
+        paint(cx - 16, cy - .5, 7, 1, sg::rule);
+        paint(cx + 9, cy - .5, 7, 1, sg::red);
+        paint(cx - .5, cy - 16, 1, 7, sg::rule);
+        paint(cx - .5, cy + 9, 1, 7, sg::rule);
+        paint.source(sg::red);
+        cairo_set_line_width(cr, 1.5);
+        cairo_arc(cr, cx, cy, 9, .35, 2 * G_PI - .35);
+        cairo_stroke(cr);
+        paint(cx - 2, cy - 2, 4, 4, sg::cream);
+    } else {
+        rounded_rectangle(cr, kSearchX, kSearchY, kSearchWidth, search_height(), 12);
+        theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
+        cairo_fill_preserve(cr);
+        cairo_set_line_width(cr, kBarOutline);
+        theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.86);
+        cairo_stroke(cr);
+        theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
+        cairo_set_line_width(cr, 2.0);
+        cairo_arc(cr, 40, 44, 9, 0, 2 * G_PI);
+        cairo_stroke(cr);
+        cairo_move_to(cr, 46.5, 50.5);
+        cairo_line_to(cr, 53.5, 57.5);
+        cairo_stroke(cr);
+    }
 
     const std::string query = state.entry ? gtk_entry_get_text(GTK_ENTRY(state.entry)) : "";
     if (state.inline_view) {
         // The native text view draws selection, IME and the caret.
-    } else if (query.empty()) {
+    } else if (query.empty() && !signal) {
         draw_layout(cr, "SEARCH THE VAULT", 67, 33,
                     "JetBrainsMono Nerd Font SemiBold 15", 0.46, 0.67, 0.52);
     } else {
         draw_entry_contents(cr, query);
     }
 
-    draw_layout(cr, "KALWER", 67, 17, "JetBrainsMono Nerd Font Bold 7.5",
-                0.30, 0.68, 0.47);
+    draw_layout(cr, "KALWER", signal ? 74 : 67, signal ? 14 : 17,
+                signal ? "sans-serif Heavy 9" : "JetBrainsMono Nerd Font Bold 7.5",
+                signal ? .078 : .30, signal ? .059 : .68, signal ? .071 : .47);
     const bool completing = !state.completion_candidates.empty();
     const std::string help = completing
         ? "TAB " + std::to_string(state.completion_index + 1) + "/" +
               std::to_string(state.completion_candidates.size()) + "   SHIFT+TAB BACK"
         : (query.starts_with("&") ? "&manage EDIT   ↑↓ SCROLL   ↵ GO" : "& GROUPS   > PTY   < JOBS   ? WEB   ↵ GO");
     draw_layout(cr, help, completing ? 360 : 350, 60 + input_extra_height,
-                "JetBrainsMono Nerd Font Medium 7.5", 0.46, 0.67, 0.52);
+                "JetBrainsMono Nerd Font Medium 7.5", signal ? .85 : .46, signal ? .70 : .67, signal ? .72 : .52);
 }
 
 void draw_results(cairo_t* cr) {
     // This is part of the finished UI texture, not a separate compositor
     // surface, so the shader cuts the panel through the same dots as its rows.
+    const bool signal = kalwer::appearance.uses_signal_geometry();
     rounded_rectangle(cr, kSearchX, results_y() - 6, kSearchWidth,
-                      kWindowHeight - results_y() - 4, 12);
+                      kWindowHeight - results_y() - 4, signal ? 0 : 12);
     theme_source_rgba(cr, 0.0, 0.075, 0.043, 0.88);
     cairo_fill(cr);
 
@@ -980,16 +1035,17 @@ void draw_results(cairo_t* cr) {
         const Result& result = state.results[index];
         const double display_row = index - state.scroll_visual;
         const double y = results_y() + display_row * kRowPitch;
-        rounded_rectangle(cr, kResultX, y, kResultWidth, kRowHeight, 10);
-        // Selection is composited by the GL shader. Keeping it out of the
-        // finished UI texture prevents the destination row from highlighting
-        // before the animated outline/fill reaches it, and avoids a full
-        // Cairo redraw plus texture upload on every arrow press.
-        theme_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
-        cairo_fill_preserve(cr);
-        cairo_set_line_width(cr, 1.0);
-        theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
-        cairo_stroke(cr);
+        // Selection is composited over this texture at the animated row position.
+        if (signal) {
+            kalwer::signal_geometry::row(SignalPaint{cr}, kResultX, y, kResultWidth, kRowHeight);
+        } else {
+            rounded_rectangle(cr, kResultX, y, kResultWidth, kRowHeight, 10);
+            theme_source_rgba(cr, 0.0, 0.105, 0.057, 0.90);
+            cairo_fill_preserve(cr);
+            cairo_set_line_width(cr, 1.0);
+            theme_source_rgba(cr, 0.31, 0.68, 0.47, 0.20);
+            cairo_stroke(cr);
+        }
 
         if (!result.character_preview.empty())
             draw_character_preview(cr, result.character_preview, kResultX + 12, y + 10);
@@ -1005,11 +1061,11 @@ void draw_results(cairo_t* cr) {
         const std::vector<int>* subtitle_positions =
             result.fuzzy_field == "subtext" ? &result.fuzzy_positions : nullptr;
         draw_layout(cr, title, kResultX + 62, y + 9,
-                    "JetBrainsMono Nerd Font Bold 11.5", 0.81, 0.89, 0.82,
+                    signal ? "sans-serif Bold 12" : "JetBrainsMono Nerd Font Bold 11.5", 0.81, 0.89, 0.82,
                     title_positions);
         draw_layout(cr, subtext, kResultX + 62, y + 32,
-                    "JetBrainsMono Nerd Font Medium 8", 0.46, 0.67, 0.52,
-                    subtitle_positions);
+                    "JetBrainsMono Nerd Font Medium 8", signal ? .85 : .46,
+                    signal ? .70 : .67, signal ? .72 : .52, subtitle_positions);
 
         const std::string rank = index < 9 ? "0" + std::to_string(index + 1)
                                            : std::to_string(index + 1);
@@ -1137,6 +1193,7 @@ bool initialize_gl() {
         uniform int backdrop_mode;
         uniform int keep_halftone;
         uniform vec3 theme_accent;
+        uniform vec4 signal_cream;
 
         const int bayer[64] = int[64](
              0,48,12,60, 3,51,15,63,
@@ -1171,7 +1228,18 @@ bool initialize_gl() {
                 ui+=vec4(dots*.8,.8)*(1.-ui.a)*panel_mask;
             }
 
-            if (has_results != 0) {
+            if (has_results != 0 && signal_cream.a > .5) {
+                float x = point.x - 25.0;
+                float y = point.y - selection_y;
+                float inside = step(0.0, x) * (1.0 - step(600.0, x))
+                             * step(0.0, y) * (1.0 - step(58.0, y));
+                float rail = max(1.0 - step(3.0, x), step(55.0, y)) * inside;
+                float marker = step(592.0, x) * (1.0 - step(597.0, x))
+                             * step(25.0, y) * (1.0 - step(32.0, y)) * inside;
+                float alpha = max(max(marker, rail), .10 * inside);
+                ui = vec4(mix(theme_accent.rgb, signal_cream.rgb, marker) * alpha, alpha)
+                   + ui * (1.0 - alpha);
+            } else if (has_results != 0) {
                 vec2 center = vec2(325.0, selection_y + 29.0);
                 float distance_to_box = rounded_box(
                     point, center, vec2(301.5, 30.5), 11.5);
@@ -1211,7 +1279,9 @@ bool initialize_gl() {
             int bx = int(mod(column, 8.0));
             int by = int(mod(row, 8.0));
             float threshold = (float(bayer[by * 8 + bx]) + 0.5) / 64.0;
-            float antialias = max(fwidth(length(point - center)), 0.65);
+            vec2 delta = abs(point - center);
+            float distance_to_site = signal_cream.a > .5 ? max(delta.x, delta.y) : length(delta);
+            float antialias = max(fwidth(distance_to_site), 0.65);
             // Density changes the radius of a site instead of multiplying its
             // entire grid cell. This preserves circular windows and prevents
             // the Bayer lattice from appearing as translucent square tiles.
@@ -1227,7 +1297,7 @@ bool initialize_gl() {
                             : 1.0 - smoothstep(
                                   site_radius - antialias,
                                   site_radius + antialias,
-                                  length(point - center));
+                                  distance_to_site);
             float coverage = backdrop_mode != 0 && keep_halftone==0 ? 1.0 : (point.y < halftone_start ? 1.0 : dot);
 
             float reveal_front = closing != 0
@@ -1336,6 +1406,10 @@ gboolean on_render(GtkGLArea* area, GdkGLContext*, gpointer) {
     glUniform1i(glGetUniformLocation(state.gl_program,"keep_halftone"),kalwer::appearance.keep_halftone);
     unsigned accent=kalwer::themes[kalwer::appearance.theme].accent;
     glUniform3f(glGetUniformLocation(state.gl_program,"theme_accent"),((accent>>16)&255)/255.f,((accent>>8)&255)/255.f,(accent&255)/255.f);
+    constexpr auto cream = kalwer::signal_geometry::cream;
+    glUniform4f(glGetUniformLocation(state.gl_program, "signal_cream"),
+                (cream >> 16) / 255.f, ((cream >> 8) & 255) / 255.f, (cream & 255) / 255.f,
+                kalwer::appearance.uses_signal_geometry() ? 1.f : 0.f);
     glUniform2f(glGetUniformLocation(state.gl_program, "logical_size"),
                 kWindowWidth, kWindowHeight);
     glUniform1f(glGetUniformLocation(state.gl_program, "opening"), progress);
@@ -1783,23 +1857,32 @@ gboolean on_output_draw(GtkWidget* widget, cairo_t* cr, gpointer) {
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
+    const bool signal = kalwer::appearance.uses_signal_geometry();
     if (unfold_progress > 0.0) {
         const double height = 2.0 + (canvas_height - hinge_y - 8.0) * unfold_progress;
         cairo_rectangle(cr, line_start, hinge_y, width - line_start - 8.0,
                         height);
         theme_source_rgba(cr, 0.0, 0.075, 0.043, state.output_game ? .08 : .975);
         if(state.output_files){cairo_new_path(cr);kalwer::files::surface_mask.paint(cr,line_start,hinge_y,width-line_start-8.,height);cairo_rectangle(cr,line_start,hinge_y,width-line_start-8.,height);}else cairo_fill_preserve(cr);
-        cairo_set_line_width(cr, state.output_game ? 2.0 : 1.5);
-        theme_source_rgba(cr, 0.46, 0.82, 0.57, 1.0);
-        cairo_stroke(cr);
+        if (signal) {
+            cairo_new_path(cr);
+            kalwer::signal_geometry::popup(SignalPaint{cr}, line_start, hinge_y,
+                                           width - line_start - 8, height);
+        } else {
+            cairo_set_line_width(cr, state.output_game ? 2.0 : 1.5);
+            theme_source_rgba(cr, 0.46, 0.82, 0.57, 1.0);
+            cairo_stroke(cr);
+        }
     }
 
-    cairo_set_line_width(cr, 2.0);
+    if (!signal || unfold_progress <= 0.0) {
+        cairo_set_line_width(cr, 2.0);
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-    theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
-    cairo_move_to(cr, line_start, hinge_y);
-    cairo_line_to(cr, line_end, hinge_y);
-    cairo_stroke(cr);
+        theme_source_rgba(cr, 0.46, 0.82, 0.57, 0.96);
+        cairo_move_to(cr, line_start, hinge_y);
+        cairo_line_to(cr, line_end, hinge_y);
+        cairo_stroke(cr);
+    }
     if (state.output_closing && state.output_snapshot && unfold_progress > 0) {
         cairo_save(cr);
         cairo_translate(cr, state.output_snapshot_bounds.x,
@@ -2083,7 +2166,10 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
 
     GtkWidget* header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
     gtk_widget_set_name(header, "kalwer-output-header");
+    if (kalwer::appearance.uses_signal_geometry())
+        gtk_style_context_add_class(gtk_widget_get_style_context(header), "signal-geometry");
     GtkWidget* title = gtk_label_new(ellipsize_utf8((terminal ? "> " : "") + command, 24).c_str());
+    gtk_widget_set_name(title, "kalwer-output-title");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_widget_set_hexpand(title, TRUE);
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
@@ -2118,8 +2204,11 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
         pango_font_description_from_string("JetBrainsMono Nerd Font 9");
     vte_terminal_set_font(VTE_TERMINAL(state.output_terminal), font);
     pango_font_description_free(font);
-    const GdkRGBA foreground{0.81, 0.89, 0.82, 1.0};
-    const GdkRGBA background{0.0, 0.075, 0.043, 1.0};
+    const bool signal = kalwer::appearance.uses_signal_geometry();
+    const GdkRGBA foreground = signal ? GdkRGBA{249 / 255., 241 / 255., 235 / 255., 1}
+                                     : GdkRGBA{.81, .89, .82, 1};
+    const GdkRGBA background = signal ? GdkRGBA{17 / 255., 17 / 255., 17 / 255., 1}
+                                     : GdkRGBA{0, .075, .043, 1};
     vte_terminal_set_colors(VTE_TERMINAL(state.output_terminal),
                             &foreground, &background, nullptr, 0);
     vte_terminal_set_scrollback_lines(VTE_TERMINAL(state.output_terminal), 5000);
@@ -2162,7 +2251,15 @@ void open_popup(const kalwer::PopupDocument& document, const std::string& sessio
         "border-color: #9ee8b4; box-shadow: inset 0 0 0 1px rgba(158,232,180,0.12); }"
         ".kalwer-output-button:active { background: #1f6b3e; color: #e8ffed; "
         "border-color: #9ee8b4; box-shadow: inset 0 2px 3px rgba(0,19,11,0.72); "
-        "text-shadow: 0 1px rgba(0,19,11,0.85); }").c_str(), -1, nullptr);
+        "text-shadow: 0 1px rgba(0,19,11,0.85); }").append(
+        " #kalwer-output-header.signal-geometry { background:#1e1419; border-radius:0;"
+        " border-bottom:1px solid #66424a; }"
+        " #kalwer-output-header.signal-geometry label { color:#ffe08a; }"
+        " #kalwer-output-header.signal-geometry #kalwer-output-title { background:#ef5148;"
+        " color:#140f12; padding:0 10px; font-family:sans-serif; font-size:11px; }"
+        " #kalwer-output-header.signal-geometry button { border-radius:0; box-shadow:none;"
+        " border:1px solid #66424a; }"
+        " #kalwer-output-header.signal-geometry button:focus { border-color:#ffe08a; }").c_str(), -1, nullptr);
     gtk_style_context_add_provider_for_screen(
         gtk_widget_get_screen(state.output_window), GTK_STYLE_PROVIDER(css),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
