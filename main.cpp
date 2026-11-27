@@ -85,9 +85,9 @@ constexpr int kQueryLimit = 512;
 constexpr int kOutputWidth = 320;
 constexpr int kOutputHeight = 378;
 #ifdef KALWER_LOCAL_BUILD
-constexpr const char* kKalwerVersion = "0.13.5+local.1";
+constexpr const char* kKalwerVersion = "0.13.6+local.1";
 #else
-constexpr const char* kKalwerVersion = "0.13.5";
+constexpr const char* kKalwerVersion = "0.13.6";
 #endif
 constexpr const char* kLatestReleaseUrl =
     "https://github.com/aridlin/kalwer/releases/latest";
@@ -3634,6 +3634,11 @@ gboolean on_button(GtkWidget*, GdkEventButton* event, gpointer) {
     return TRUE;
 }
 
+void focus_launcher_input() {
+    GtkWidget* input = state.inline_view ? state.inline_view : state.entry;
+    if (input && gtk_widget_get_visible(input)) gtk_widget_grab_focus(input);
+}
+
 gboolean focus_kalwer(gpointer) {
     if (!state.window || !gtk_widget_get_visible(state.window) || state.closing || state.blur_source || state.output_window) {
         return G_SOURCE_REMOVE;
@@ -3654,7 +3659,7 @@ gboolean focus_kalwer(gpointer) {
                   nullptr, nullptr, nullptr, &error);
     if (error) g_error_free(error);
     gtk_window_present(GTK_WINDOW(state.window));
-    gtk_widget_grab_focus(state.inline_view?state.inline_view:state.entry);
+    focus_launcher_input();
     return G_SOURCE_REMOVE;
 }
 
@@ -3709,7 +3714,7 @@ void show_popup() {
     gtk_widget_show_all(state.window);
     if(state.inline_view){gtk_widget_hide(state.entry);style_inline_view(state.inline_view);resize_inline_input();gtk_widget_set_opacity(state.inline_scroll,0);}
     gtk_window_present(GTK_WINDOW(state.window));
-    gtk_widget_grab_focus(state.inline_view?state.inline_view:state.entry);
+    focus_launcher_input();
     g_timeout_add(35, focus_kalwer, nullptr);
     g_timeout_add(180, focus_kalwer, nullptr);
     ensure_animation();
@@ -3765,6 +3770,10 @@ void activate(GtkApplication* app, gpointer) {
         return G_SOURCE_CONTINUE;
     }, nullptr);
     state.window = gtk_application_window_new(app);
+    g_signal_connect(state.window, "notify::is-active", G_CALLBACK(+[](
+            GtkWindow* window, GParamSpec*, gpointer) {
+        if (gtk_window_is_active(window) && !state.closing) focus_launcher_input();
+    }), nullptr);
     g_signal_connect(state.window,"focus-out-event",G_CALLBACK(+[](GtkWidget*,GdkEventFocus*,gpointer)->gboolean {
         if (!state.hide_on_blur || state.blur_source) return FALSE;
         state.blur_source=g_timeout_add(40,+[](gpointer)->gboolean {
